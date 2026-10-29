@@ -1,0 +1,176 @@
+.head {
+  padding-bottom: 28rpx;
+}
+
+.count {
+  font-size: 22rpx;
+  color: var(--gold);
+  background: var(--gold-soft);
+  padding: 6rpx 18rpx;
+  border-radius: 18rpx;
+}
+
+.head-desc {
+  font-size: 25rpx;
+  color: #8e8d9c;
+}
+
+/* 预览发色 */
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  margin-top: 30rpx;
+  padding: 18rpx 22rpx;
+  border-radius: 22rpx;
+  background: var(--surface);
+  border: 2rpx solid rgba(255, 255, 255, 0.06);
+}
+
+.preview-label {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+}
+
+.preview-scroll {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.preview-inner {
+  display: inline-flex;
+  gap: 18rpx;
+  padding: 2rpx 0;
+}
+
+.sw {
+  /* 46rpx(23pt) 太小，12 个色点挤在一起点不准。
+     视觉放到 56rpx，热区用 ::after 扩到 62rpx ——
+     gap 是 18rpx，56 + 18 = 74rpx，热区必须小于它避免重叠。 */
+  width: 56rpx;
+  height: 56rpx;
+  border-radius: 50%;
+  padding: 3rpx;
+  border: 2rpx solid transparent;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.sw::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 62rpx;
+  height: 62rpx;
+}
+
+.sw.on {
+  border-color: var(--gold);
+  box-shadow: 0 0 14rpx rgba(224, 168, 111, 0.55);
+}
+
+.sw-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2rpx solid rgba(255, 255, 255, 0.14);
+}
+
+/* 网格 */
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22rpx;
+  padding-top: 28rpx;
+}
+
+.cell {
+  width: calc((100% - 22rpx) / 2);
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12rpx;
+}
+
+.cell-visual {
+  position: relative;
+  width: 100%;
+  height: 340rpx;
+  border-radius: 26rpx;
+  background: linear-gradient(165deg, #1e1e2b 0%, #12121a 100%);
+  border: 2rpx solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.cell:active .cell-visual {
+  border-color: rgba(224, 168, 111, 0.55);
+}
+
+.cell-thumb {
+  width: 200rpx;
+  height: 240rpx;
+}
+
+.cell-fav {
+  position: absolute;
+  right: 14rpx;
+  top: 12rpx;
+  font-size: 26rpx;
+  color: var(--gold);
+}
+
+.cell-tag {
+  position: absolute;
+  left: 14rpx;
+  bottom: 14rpx;
+  font-size: 18rpx;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(0, 0, 0, 0.42);
+  padding: 4rpx 12rpx;
+  border-radius: 12rpx;
+}
+
+.cell-info {
+  padding: 14rpx 6rpx 0 6rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
+}
+
+.cell-name {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+}
+
+.cell-face {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.grid-note {
+  padding: 32rpx 8rpx 24rpx 8rpx;
+  text-align: center;
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.6;
+}
+
+/* 第二行提示（长按可收藏）比正文更弱一档，避免抢注意力 */
+.grid-note-dim {
+  display: block;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+/* 微信原生 tabBar 已自动避让 iPhone 底部横条，
+   app.wxss 里 .safe-bottom 的 env(safe-area-inset-bottom) 在这里
+   会变成第二层留白，iPhone X 以上多出约 34px。
+   tabBar 页只保留一个小间距就够。 */
+.safe-bottom {
+  padding-bottom: 24rpx;
+}

@@ -1,0 +1,161 @@
+<scroll-view scroll-y class="page" enhanced="{{true}}" show-scrollbar="{{false}}">
+  <!-- Hero -->
+  <view class="hero" style="padding-top: {{topPad}}px;">
+    <view class="hero-glow"></view>
+    <view class="hero-grid"></view>
+
+    <view class="hero-top">
+      <view class="brand">
+        <text class="brand-mark">镜界</text>
+        <text class="brand-sub">MIRROR LAB</text>
+      </view>
+      <view class="shop-pill">{{shop.branch}}</view>
+    </view>
+
+    <view class="hero-copy">
+      <text class="hero-title">先看见</text>
+      <text class="hero-title">再决定</text>
+      <text class="hero-desc">打开摄像头，实时看到自己换发型、换发色的样子。不用等剪完才后悔。</text>
+    </view>
+
+    <view class="hero-cta" bindtap="startTryon">
+      <text class="hero-cta-text">开始实时试戴</text>
+      <text class="hero-cta-arrow">→</text>
+    </view>
+
+    <view class="hero-meta">
+      <view class="meta-item">
+        <text class="meta-num">{{styleCount}}</text>
+        <text class="meta-label">款发型</text>
+      </view>
+      <view class="meta-div"></view>
+      <view class="meta-item">
+        <text class="meta-num">{{colorCount}}</text>
+        <text class="meta-label">种发色</text>
+      </view>
+      <view class="meta-div"></view>
+      <view class="meta-item">
+        <text class="meta-num">实时</text>
+        <text class="meta-label">AR 预览</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 热门发型 -->
+  <view class="section">
+    <view class="section-head">
+      <text class="h2">本周热门</text>
+      <text class="more" bindtap="goGallery">全部 {{styleCount}} 款 →</text>
+    </view>
+
+    <!-- catchtouchstart/move：横滑时不要把卡片点击也触发出去，
+         否则用户只是想滚一下热门列表，却顺手打开了试戴页 -->
+    <scroll-view
+      scroll-x
+      class="hot-strip"
+      enhanced="{{true}}"
+      show-scrollbar="{{false}}"
+      catchtouchstart="onHotTouchStart"
+      catchtouchmove="onHotTouchMove"
+      bindtouchcancel="onHotTouchCancel"
+    >
+      <view class="hot-inner">
+        <view
+          wx:for="{{hot}}"
+          wx:key="id"
+          class="hot-card"
+          data-id="{{item.id}}"
+          bindtap="openStyle"
+          aria-role="button"
+          aria-label="{{item.name}}，{{item.tag}}，适合{{item.face}}"
+        >
+          <view class="hot-visual">
+            <image class="hot-thumb" src="{{item.thumb}}" mode="aspectFit" />
+            <view class="hot-badge">{{item.tag}}</view>
+          </view>
+          <text class="hot-name">{{item.name}}</text>
+          <text class="hot-face">{{item.face}}</text>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <!-- 发色墙 -->
+  <view class="section">
+    <view class="section-head">
+      <text class="h2">换个发色试试</text>
+      <text class="more">点一下直接试戴</text>
+    </view>
+
+    <view class="color-wall">
+      <view
+        wx:for="{{colors}}"
+        wx:key="id"
+        class="color-chip"
+        data-id="{{item.id}}"
+        bindtap="openColor"
+        aria-role="button"
+        aria-label="用 {{item.name}} 发色试戴"
+      >
+        <view class="color-chip-dot" style="background: {{item.swatch}};"></view>
+        <text class="color-chip-name">{{item.name}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 门店信息 -->
+  <view class="section">
+    <view class="shop-card">
+      <view class="shop-head">
+        <view class="shop-name-wrap">
+          <text class="shop-name">{{shop.name}}</text>
+          <text class="shop-branch">{{shop.branch}}</text>
+        </view>
+        <!-- 营业状态按当前时间计算。原来硬编码「营业中」，
+             凌晨打开也显示营业，顾客照着到店发现关门。 -->
+        <!-- 只写「营业中」不够用：顾客看到「营业中」不知道还有半小时就打烊，
+             看到「已休息」也不知道几点开门要不要等。补上边界时间。 -->
+        <view
+          class="shop-open {{shopOpen && shopOpen.open ? 'is-open' : 'is-closed'}}"
+          aria-role="text"
+          aria-label="{{shopOpen ? (shopOpen.open ? '营业中，' + shopOpen.hint : '已休息，' + shopOpen.hint) : '营业状态未知'}}"
+        >
+          {{shopOpen && shopOpen.open ? '营业中' : '已休息'}}<text wx:if="{{shopOpen}}" class="shop-open-hint" aria-hidden="true"> · {{shopOpen.hint}}</text>
+        </view>
+      </view>
+      <view class="shop-lines">
+        <view class="shop-line">
+          <text class="shop-line-k">地址</text>
+          <text class="shop-line-v">{{shop.address}}</text>
+        </view>
+        <view class="shop-line">
+          <text class="shop-line-k">时间</text>
+          <text class="shop-line-v">{{shop.hours}}</text>
+        </view>
+        <view class="shop-line">
+          <text class="shop-line-k">电话</text>
+          <text class="shop-line-v">{{shop.phone}}</text>
+        </view>
+      </view>
+      <view class="shop-actions">
+        <view class="shop-btn" bindtap="callShop">拨打电话</view>
+        <view class="shop-btn is-primary" bindtap="startTryon">到店前先试戴</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="footer-note">
+    <text>发型效果为示意预览，实际效果请与发型师沟通确认</text>
+  </view>
+
+  <view class="safe-bottom"></view>
+</scroll-view>
+
+<!-- 隐私授权。放在 scroll-view **外面**：它是 fixed 全屏遮罩，
+     放进 scroll-view 里会跟着一起滚，滚到一半弹出来位置就歪了。 -->
+<privacy-gate
+  show="{{privacyOn}}"
+  contract-name="{{privacyContract}}"
+  bind:agree="onPrivacyAgree"
+  bind:cancel="onPrivacyCancel"
+/>

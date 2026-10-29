@@ -1,0 +1,52 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/tryon/tryon",
+    "pages/gallery/gallery",
+    "pages/history/history",
+    "pages/profile/profile"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#12121f",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "镜界 AR 试发型",
+    "backgroundColor": "#0b0b12",
+    "backgroundColorTop": "#0b0b12",
+    "backgroundColorBottom": "#0b0b12",
+    "backgroundTextStyle": "light",
+    "enablePullDownRefresh": false
+  },
+  "tabBar": {
+    "color": "#83839a",
+    "selectedColor": "#e0a86f",
+    "backgroundColor": "#12121f",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/gallery/gallery",
+        "text": "发型库"
+      },
+      {
+        "pagePath": "pages/history/history",
+        "text": "试戴记录"
+      },
+      {
+        "pagePath": "pages/profile/profile",
+        "text": "我的"
+      }
+    ]
+  },
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json",
+  "requiredPrivateInfos": [],
+  "permission": {
+    "scope.camera": {
+      "desc": "用于实时识别人脸位置，把发型准确地戴在头上"
+    }
+  },
+  "style": "v2"
+}

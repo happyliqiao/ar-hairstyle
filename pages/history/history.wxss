@@ -1,0 +1,158 @@
+.head {
+  padding-bottom: 32rpx;
+}
+
+.clear {
+  font-size: 23rpx;
+  color: rgba(233, 69, 96, 1);
+  padding: 8rpx 0 8rpx 20rpx;
+}
+
+.head-desc {
+  font-size: 24rpx;
+  color: #8e8d9c;
+}
+
+/* 列表 */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.rec {
+  display: flex;
+  align-items: center;
+  gap: 26rpx;
+  padding: 20rpx;
+  border-radius: 26rpx;
+  background: var(--surface);
+  border: 2rpx solid rgba(255, 255, 255, 0.06);
+}
+
+.rec:active {
+  border-color: rgba(224, 168, 111, 0.45);
+}
+
+.rec-visual {
+  width: 132rpx;
+  height: 168rpx;
+  border-radius: 18rpx;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #0e0e16;
+}
+
+.rec-img {
+  width: 132rpx;
+  height: 168rpx;
+  display: block;
+}
+
+.rec-img-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #1c1c28 0%, #101018 100%);
+}
+
+.rec-img-empty-text {
+  font-size: 19rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.rec-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+  min-width: 0;
+}
+
+.rec-style {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+}
+
+.rec-meta {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+}
+
+.rec-color-dot {
+  width: 22rpx;
+  height: 22rpx;
+  border-radius: 50%;
+  border: 2rpx solid rgba(255, 255, 255, 0.18);
+}
+
+.rec-color {
+  font-size: 22rpx;
+  color: #a3a1b0;
+}
+
+.rec-time {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.rec-arrow {
+  font-size: 40rpx;
+  color: rgba(255, 255, 255, 0.2);
+  padding-right: 6rpx;
+  flex-shrink: 0;
+}
+
+/* 分享按钮：清掉 button 默认样式，做成一个小胶囊。
+   高度 52rpx(26pt) 偏小，提到 64rpx；再用 padding 把横向热区撑开。 */
+.rec-share {
+  margin: 0 8rpx 0 0;
+  padding: 0 24rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  font-size: 22rpx;
+  color: var(--gold);
+  background: rgba(224, 168, 111, 0.12);
+  border: 1rpx solid rgba(224, 168, 111, 0.32);
+  border-radius: 32rpx;
+  flex-shrink: 0;
+}
+
+/* button 默认有 ::after 边框，必须显式清掉 */
+.rec-share::after {
+  border: none;
+}
+
+.rec-share-hover {
+  background: rgba(224, 168, 111, 0.24);
+}
+
+/* 空状态按钮 */
+.empty-btn {
+  margin-top: 44rpx;
+  padding: 0 56rpx;
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: 44rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #1a1208;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 50%, var(--gold-deep) 100%);
+}
+
+.list-note {
+  padding: 36rpx 8rpx 24rpx 8rpx;
+  text-align: center;
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* 微信原生 tabBar 已自动避让 iPhone 底部横条，
+   app.wxss 里 .safe-bottom 的 env(safe-area-inset-bottom) 在这里
+   会变成第二层留白，iPhone X 以上多出约 34px。
+   tabBar 页只保留一个小间距就够。 */
+.safe-bottom {
+  padding-bottom: 24rpx;
+}

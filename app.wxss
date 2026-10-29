@@ -1,0 +1,190 @@
+/* ============ 全局设计变量 ============ */
+page {
+  /* 颜色只有这一处定义。之前 --bg-soft / --surface-2 / --line-strong /
+     --text-dim / --rose 五个变量定义了却没人用（都是几轮重构后剩下的），
+     已删掉——留着一堆死变量只会让人改配色时多犹豫几次。 */
+  --bg: #0b0b12;
+  --surface: #16161f;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #f2f0ee;
+  --text-mute: #6a6979;
+  --gold: #e0a86f;
+  --gold-light: #f2cb9a;
+  --gold-deep: #c0854c;
+  --gold-soft: rgba(224, 168, 111, 0.14);
+  /* tabBar 的两个色单独定义，**故意不等于 --surface / --text-mute**：
+     - tabBar 背景比 --surface 更暗（#12121f vs #16161f），让它退到页面后面，
+       用户一眼能分出「这块是固定的」和「这块会滚」；
+     - 未选中文字比 --text-mute 更亮（#83839a vs #6a6979），因为 tabBar 的
+       字比正文小、又是唯一的功能入口，暗一档就读不清了
+       实测对比度：#83839a on #12121f = 5.06:1（--text-mute 只有 3.5:1） */
+  --tab-bg: #12121f;
+  --tab-text: #83839a;
+
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  font-size: 28rpx;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+view,
+text,
+scroll-view,
+image,
+button,
+input,
+canvas {
+  box-sizing: border-box;
+}
+
+/* ============ 排版 ============ */
+.h1 {
+  font-size: 52rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+  line-height: 1.25;
+}
+
+.h2 {
+  font-size: 36rpx;
+  font-weight: 600;
+  letter-spacing: 0.5rpx;
+}
+
+.h3 {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+/* ============ 区块 ============ */
+.section {
+  padding: 0 32rpx;
+  margin-bottom: 48rpx;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 24rpx;
+}
+
+.section-head .more {
+  font-size: 24rpx;
+  color: var(--text-mute);
+}
+
+/* ============ 按钮 ============ */
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 92rpx;
+  border-radius: 46rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+  letter-spacing: 1rpx;
+  border: none;
+  padding: 0 40rpx;
+  transition: opacity 0.2s;
+}
+
+.btn::after {
+  border: none;
+}
+
+.btn-main {
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 48%, var(--gold-deep) 100%);
+  color: #1a1208;
+  box-shadow: 0 12rpx 32rpx rgba(224, 168, 111, 0.28);
+}
+
+.btn:active {
+  opacity: 0.82;
+}
+
+/* ============ 页面骨架 ============ */
+/* .page 原来在 gallery / history / profile 三个文件里各抄了一遍。
+   index 是通栏大图版式，不需要左右留白，所以它在自己的 wxss 里
+   显式写 padding: 0 覆盖 —— 覆盖要写全，不能只写 height，
+   否则会悄悄继承这里的 32rpx 内边距。 */
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 0 32rpx;
+}
+
+.head-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10rpx;
+}
+
+.meta-label {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ============ 卡片 ============ */
+.card {
+  background: var(--surface);
+  border: 2rpx solid var(--line);
+  border-radius: 28rpx;
+  padding: 32rpx;
+}
+
+/* ============ 标签 ============ */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 40rpx;
+  padding: 0 16rpx;
+  border-radius: 20rpx;
+  font-size: 20rpx;
+  letter-spacing: 0.5rpx;
+  background: var(--gold-soft);
+  color: var(--gold);
+}
+
+/* ============ 空状态 ============ */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 120rpx 48rpx;
+  text-align: center;
+}
+
+.empty .icon {
+  font-size: 88rpx;
+  opacity: 0.35;
+  margin-bottom: 24rpx;
+}
+
+.empty .title {
+  font-size: 30rpx;
+  font-weight: 600;
+  margin-bottom: 12rpx;
+}
+
+.empty .desc {
+  font-size: 24rpx;
+  color: var(--text-mute);
+  line-height: 1.6;
+}
+
+/* ============ 安全区 ============ */
+.safe-bottom {
+  padding-bottom: calc(24rpx + env(safe-area-inset-bottom));
+}
+
+/* ============ 分隔 ============ */
+.hr {
+  height: 2rpx;
+  background: var(--line);
+  margin: 32rpx 0;
+}

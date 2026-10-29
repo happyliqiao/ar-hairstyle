@@ -1,0 +1,489 @@
+<view class="stage">
+  <!-- 实时画面 -->
+  <camera
+    wx:if="{{cameraReady && !isDevtools}}"
+    class="cam"
+    device-position="{{devicePosition}}"
+    flash="off"
+    resolution="high"
+    frame-size="medium"
+    binderror="onCameraError"
+  ></camera>
+
+  <view wx:elif="{{isDevtools}}" class="cam-off cam-off-devtools">
+    <view class="dt-hint">
+      <text class="dt-hint-title">需要真机才能试戴</text>
+      <text class="dt-hint-desc">模拟器没有摄像头，不提供虚拟头像或合成照片。点右上角「预览」生成二维码，用手机扫码查看真实效果。</text>
+    </view>
+  </view>
+
+  <view wx:else class="cam-off">
+    <view class="cam-off-inner">
+      <view class="cam-off-icon">◉</view>
+      <!-- 权限被撤销/相机失败都会改写这行，读屏用户必须立刻听到 -->
+      <text class="cam-off-title" aria-live="polite">{{cameraMsg}}</text>
+      <text class="cam-off-desc">开启摄像头后，就能实时看到自己换发型、换发色的样子</text>
+      <button class="btn btn-main cam-off-btn" bindtap="requestCamera">开启相机</button>
+    </view>
+  </view>
+
+  <!-- 发型叠加层 -->
+  <canvas
+    type="2d"
+    id="hairCanvas"
+    class="overlay {{isDevtools ? 'is-off' : ''}}"
+    disable-scroll="true"
+    bindtouchstart="onTouchStart"
+    bindtouchmove="onTouchMove"
+    bindtouchend="onTouchEnd"
+    bindtouchcancel="onTouchCancel"
+  ></canvas>
+
+  <!-- 上下渐隐，保证文字可读 -->
+  <view class="fade-top"></view>
+  <view class="fade-bottom"></view>
+
+  <!-- 取景引导框（人脸验证式）。
+       框是固定的，不跟脸走 —— 用户主动把头移进来，这是整个产品的
+       交互前提。它和上一轮删掉的「虚拟头型」不是一回事：
+       虚拟头型是在框里画一个假人 + 假发冒充效果，已经被删干净；
+       这里只有一条虚线参考线，本身不代表任何发型。
+       几何（cx/cy/w/h）全部来自 face-fit.guideFrame，和判定共用同一份数值，
+       否则会出现「框明明套住了脸，却提示没对齐」。
+       形状只有一个瓜子形轮廓，不额外加四角括号：截图对比过，
+       椭圆 + 四个外接矩形角的组合在视觉上互不相干，
+       看起来像「一个蛋加四个孤立的拐角」，反而干扰判断。
+       is-hidden：对齐满 3 秒后淡出（不是删掉，留过渡），一偏离立刻回来。
+       aria-hidden：框和提示都是纯视觉的，同样的信息 statusText 已经
+       通过 aria-live 播报过，读屏用户不该听到两遍。 -->
+  <view
+    wx:if="{{guide.show && cameraReady && !manualOn && !isDevtools}}"
+    class="face-guide is-{{guide.state}} {{guide.hidden ? 'is-hidden' : ''}}"
+    style="left: {{guide.cx}}px; top: {{guide.cy}}px; width: {{guide.w}}px; height: {{guide.h}}px;"
+    aria-hidden="true"
+  >
+    <view class="fg-ring"></view>
+    <view wx:if="{{guide.hint}}" class="fg-hint">{{guide.hint}}</view>
+  </view>
+
+  <!-- 自动识脸不可用时的降级入口。
+       之前这里只有一句「可拖动微调」的状态文字，画布是空的：
+       用户不知道要拖什么、往哪拖，拖了会不会有反应。
+       现在把「手动定位」做成一个明确的按钮，点一下才进入手动模式，
+       进去之后状态栏会写明「手动定位」，不冒充自动识脸。
+       微调面板展开时不显示：面板本身就在这个高度上，会把它压住；
+       而且用户既然去拉滑块了，滑块自己就会进入手动定位。 -->
+  <view wx:if="{{cameraReady && arUnavailable && !faceFound && !manualOn && !adjustMode && !isDevtools}}" class="locate-card">
+    <text class="locate-title">这台设备没能自动识脸</text>
+    <text class="locate-desc">可以手动把发型对准自己的发际线</text>
+    <view
+      class="locate-btn"
+      bindtap="enterManual"
+      aria-role="button"
+      aria-label="手动定位发型"
+    >手动定位</view>
+  </view>
+
+  <!-- 顶部栏 -->
+  <view class="topbar" style="padding-top: {{statusBarHeight}}px;">
+    <view class="topbar-row">
+      <!-- 纯符号按钮必须带 aria-label：读屏用户听到「‹」「⇄」
+           完全不知道是干什么的。aria-role="button" 让它被识别为按钮。 -->
+      <view
+        class="round-btn back"
+        bindtap="goBack"
+        aria-role="button"
+        aria-label="返回上一页"
+      >‹</view>
+      <!-- aria-live="polite"：状态文字是会变的（正在启动… → 已对齐 → 把脸放进框里）。
+           没有 live 区域时，读屏用户停在页面上听到的永远是进入那一刻的旧文案，
+           他不知道自己的脸已经被识别到了，会一直举着手机等。 -->
+      <view class="status-pill {{faceFound ? 'is-on' : ''}}" aria-role="text" aria-live="polite" aria-label="识脸状态：{{statusText}}">
+        <view class="pulse"></view>
+        <text>{{statusText}}</text>
+      </view>
+      <view
+        class="round-btn"
+        bindtap="switchCamera"
+        aria-role="button"
+        aria-label="切换前后摄像头"
+      >⇄</view>
+    </view>
+
+    <!-- 微调面板 -->
+    <view wx:if="{{adjustMode}}" class="adjust">
+      <view class="adjust-row">
+        <text class="adjust-label">大小</text>
+        <slider
+          class="adjust-slider"
+          min="45"
+          max="200"
+          value="{{sizeVal}}"
+          aria-label="发型大小"
+          activeColor="#e0a86f"
+          backgroundColor="rgba(255,255,255,0.18)"
+          block-color="#ffffff"
+          block-size="18"
+          bindchanging="onSizeChanging"
+          bindchange="onSizeChange"
+        />
+      </view>
+      <view class="adjust-row">
+        <text class="adjust-label">位置</text>
+        <slider
+          class="adjust-slider"
+          min="20"
+          max="80"
+          value="{{yVal}}"
+          aria-label="发型上下位置"
+          activeColor="#e0a86f"
+          backgroundColor="rgba(255,255,255,0.18)"
+          block-color="#ffffff"
+          block-size="18"
+          bindchanging="onYChanging"
+          bindchange="onYChange"
+        />
+      </view>
+      <view class="adjust-row">
+        <text class="adjust-label">旋转</text>
+        <slider
+          class="adjust-slider"
+          min="-30"
+          max="30"
+          value="{{rotVal}}"
+          aria-label="发型旋转角度"
+          activeColor="#e0a86f"
+          backgroundColor="rgba(255,255,255,0.18)"
+          block-color="#ffffff"
+          block-size="18"
+          bindchanging="onRotChanging"
+          bindchange="onRotChange"
+        />
+      </view>
+      <view class="adjust-row adjust-row-switch">
+        <text class="adjust-label">镜像</text>
+        <view
+          class="switch-track {{mirrorX ? 'on' : ''}}"
+          bindtap="toggleMirror"
+          aria-role="switch"
+          aria-label="画面左右翻转"
+          aria-checked="{{mirrorX}}"
+        >
+          <view class="switch-knob"></view>
+        </view>
+        <text class="adjust-tip adjust-tip-inline">画面左右翻转</text>
+      </view>
+      <text class="adjust-tip">也可以直接拖动画面调整位置</text>
+    </view>
+  </view>
+
+  <!-- 底部操作区 -->
+  <view wx:if="{{!isDevtools}}" class="panel" style="padding-bottom: {{safeBottom}}px;">
+    <!-- 自动匹配结果。
+         这是产品唯一会「自己动手」的地方：测到脸型之后直接把款换上去，
+         所以必须同时说清三件事 —— 测到了什么、换成了什么、为什么。
+         少说任何一条，用户看到的就是「画面自己变了」。
+         微调时收起：那时候用户在做精细对齐，卡片只是噪音。 -->
+    <view
+      wx:if="{{rec.show && rec.expanded && !adjustMode}}"
+      class="rec-card"
+      bindtap="collapseRec"
+    >
+      <view class="rec-head">
+        <text class="rec-badge">按脸型匹配</text>
+        <text class="rec-shape">测得{{rec.shapeLabel}}脸</text>
+        <text
+          class="rec-close"
+          catchtap="dismissRec"
+          aria-role="button"
+          aria-label="收起推荐"
+        >×</text>
+      </view>
+
+      <!-- 三种说法必须分开：
+           正适合 —— 推荐的就是当前这款，确实什么都没变，不能写「已换上」
+           已换上 —— 真的替用户换了
+           更推荐 —— 没替用户换（他表过态），给他一个按钮 -->
+      <view class="rec-main">
+        <text wx:if="{{rec.same}}" class="rec-title">「{{rec.styleName}}」正适合你的脸型</text>
+        <text wx:elif="{{rec.auto}}" class="rec-title">已换上「{{rec.styleName}}」</text>
+        <text wx:else class="rec-title">更推荐「{{rec.styleName}}」</text>
+        <text
+          wx:if="{{!rec.same && !rec.auto}}"
+          class="rec-use"
+          catchtap="useRecStyle"
+          aria-role="button"
+          aria-label="换成推荐的{{rec.styleName}}"
+        >换成这款</text>
+      </view>
+      <!-- 「换一款」：同档也合适的第 2、3 名。
+           只给第一名的话，用户不满意就只剩自己横滑 10 款这一条路，
+           而「哪几款也合适」是排序里本来就有的信息。
+           放在理由这一行而不是标题行：标题 + 两个按钮在 375pt 上会换行，
+           卡片一换行就把面板顶高 23pt，重新压到脸上。 -->
+      <view class="rec-why-row">
+        <text class="rec-why">{{rec.reason}}</text>
+        <text
+          wx:if="{{rec.alt.length > 1}}"
+          class="rec-next"
+          catchtap="nextRecStyle"
+          aria-role="button"
+          aria-label="换一款同样适合你脸型的发型"
+        >换一款</text>
+      </view>
+
+      <view wx:if="{{rec.skinBusy}}" class="rec-sub">正在测肤色…</view>
+      <view wx:elif="{{rec.colorName}}" class="rec-sub">
+        <text class="rec-sub-key">肤色{{rec.skinLabel}}，发色「{{rec.colorName}}」</text>
+        <text class="rec-sub-why">{{rec.colorReason}}</text>
+      </view>
+      <!-- 两路测量不一致 = 画面光线偏了。这时候发色只是参考，
+           必须说出来，不能让它看起来跟测准了是一个可信度。 -->
+      <view wx:if="{{rec.colorUnsure && !rec.skinBusy}}" class="rec-sub rec-sub-warn">
+        画面光线偏色，这条发色仅供参考
+      </view>
+
+      <!-- 脸型是靠人脸框宽高比推的，测不出方脸、也没法区分骨骼。
+           所以必须留一个「你说了算」的出口 —— 比硬装准确诚实得多。
+           落在两条边界的死区里时（0.70~0.84 之间且贴边），
+           这句标签直接说明「在边界上」：不新增一行，占位和原来一样。 -->
+      <view class="rec-shapes">
+        <text class="rec-shapes-label">{{rec.shapeUnsure ? '脸型在边界上' : '判得不准？'}}</text>
+        <text
+          class="rec-chip {{rec.shape === 'round' ? 'is-on' : ''}}"
+          data-shape="round"
+          catchtap="pickShape"
+          aria-role="button"
+          aria-label="按圆脸重新匹配"
+        >圆脸</text>
+        <text
+          class="rec-chip {{rec.shape === 'oval' ? 'is-on' : ''}}"
+          data-shape="oval"
+          catchtap="pickShape"
+          aria-role="button"
+          aria-label="按标准脸重新匹配"
+        >标准</text>
+        <text
+          class="rec-chip {{rec.shape === 'long' ? 'is-on' : ''}}"
+          data-shape="long"
+          catchtap="pickShape"
+          aria-role="button"
+          aria-label="按长脸重新匹配"
+        >长脸</text>
+      </view>
+    </view>
+
+    <!-- 收起态：一行小条。展开的卡片会把面板顶高 ~150pt，
+         正好压住取景框下沿，所以读完就收起来，留一个入口。 -->
+    <view
+      wx:if="{{rec.show && !rec.expanded && !adjustMode}}"
+      class="rec-mini"
+      bindtap="expandRec"
+      aria-role="button"
+      aria-label="展开脸型匹配结果，{{rec.shapeLabel}}脸，推荐{{rec.styleName}}{{rec.colorName ? '，发色' + rec.colorName : ''}}"
+    >
+      <text class="rec-mini-badge">按脸型匹配</text>
+      <!-- 发色结果比脸型晚到（要等摄像头帧，暗光下还会重试），
+           而卡片 7 秒就收起了 —— 只写脸型和发型的话，
+           用户会看到颜色自己变了，小条上却一个字都没提。 -->
+      <!-- 分隔符写进同一个插值里：单独一个「·」文本节点会被读屏念成
+           「中点」，无障碍审计也会拦（见 tests/a11y-audit.js）。 -->
+      <text class="rec-mini-text">{{rec.shapeLabel}}脸，推荐「{{rec.styleName}}」<text wx:if="{{rec.colorName}}" class="rec-mini-color">{{' · ' + rec.colorName}}</text></text>
+      <text class="rec-mini-more">展开</text>
+    </view>
+
+    <!-- 卡片展开时，这三块先让位。
+         不这么做的话，卡片会把面板顶到 213pt（屏高 667 的机型），
+         取景框下沿在 404，等于半张脸被盖住。
+         让位之后面板只比原来高十几 pt，卡片收起时原样回来。 -->
+    <view wx:if="{{!(rec.show && rec.expanded)}}" class="panel-head">
+      <view class="panel-title">
+        <text class="style-current">{{currentStyleName}}</text>
+        <text class="style-tag">{{currentTag}}</text>
+      </view>
+      <view class="panel-actions">
+        <text class="mini-btn" bindtap="toggleAdjust">{{adjustMode ? '收起微调' : '微调'}}</text>
+        <text class="mini-btn" bindtap="openInfo">款式详情</text>
+      </view>
+    </view>
+
+    <!-- 发型横滑 -->
+    <!-- catchtouchstart/move 记录滑动位移：用户横滑只是想看看，
+         手指抬起时若落在某张卡片上，scroll-view 仍会派发 tap，
+         结果「看一下」变成「切换发型」。位移超过阈值就当作滑动，
+         在 pickStyle 里把这次 tap 吞掉。 -->
+    <!-- scroll-into-view：从「我的收藏」或分享卡片进来时，选中的那款
+         可能排在第 9 位，而横滑条默认停在最左边 —— 用户看到发型变了，
+         底部却高亮着最左边那张，会以为点错了。只在进页面时定位一次；
+         用户自己点卡片时不重设，否则会把刚点的那张甩到最左边。 -->
+    <scroll-view
+      wx:if="{{!(rec.show && rec.expanded)}}"
+      scroll-x
+      class="strip"
+      enhanced="{{true}}"
+      show-scrollbar="{{false}}"
+      scroll-into-view="{{stripAnchor}}"
+      scroll-with-animation="{{false}}"
+      catchtouchstart="onStripTouchStart"
+      catchtouchmove="onStripTouchMove"
+      bindtouchcancel="onStripTouchCancel"
+    >
+      <view class="strip-inner">
+        <view
+          wx:for="{{styles}}"
+          wx:key="id"
+          id="st-{{item.id}}"
+          class="style-card {{currentStyle === item.id ? 'is-active' : ''}}"
+          data-id="{{item.id}}"
+          bindtap="pickStyle"
+          aria-role="button"
+          aria-label="发型 {{item.name}}{{currentStyle === item.id ? '，已选中' : ''}}"
+        >
+          <image class="style-thumb" src="{{item.thumb}}" mode="aspectFit" />
+          <text class="style-name">{{item.name}}</text>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 发色横滑 -->
+    <view wx:if="{{!(rec.show && rec.expanded)}}" class="color-bar">
+      <scroll-view
+        scroll-x
+        class="color-scroll"
+        enhanced="{{true}}"
+        show-scrollbar="{{false}}"
+        scroll-into-view="{{colorAnchor}}"
+        scroll-with-animation="{{false}}"
+        catchtouchstart="onColorTouchStart"
+        catchtouchmove="onColorTouchMove"
+        bindtouchcancel="onColorTouchCancel"
+      >
+        <view class="color-inner">
+          <view
+            wx:for="{{colors}}"
+            wx:key="id"
+            id="cl-{{item.id}}"
+            class="color-swatch {{currentColor === item.id ? 'is-active' : ''}}"
+            data-id="{{item.id}}"
+            bindtap="pickColor"
+            aria-role="button"
+            aria-label="发色 {{item.name}}{{currentColor === item.id ? '，已选中' : ''}}"
+          >
+            <view class="color-fill" style="background: {{item.swatch}};"></view>
+          </view>
+        </view>
+      </scroll-view>
+      <text class="color-label">{{currentColorName}}</text>
+    </view>
+
+    <!-- 拍摄 -->
+    <view class="shutter-row">
+      <view
+        class="shutter-side"
+        bindtap="toggleFavorite"
+        aria-role="button"
+        aria-label="{{isFav ? '取消收藏当前发型' : '收藏当前发型'}}"
+      >
+        <text class="shutter-side-icon" aria-hidden="true">{{isFav ? '★' : '☆'}}</text>
+        <text class="shutter-side-text">{{isFav ? '已收藏' : '收藏'}}</text>
+      </view>
+
+      <view
+        class="shutter {{shooting ? 'is-busy' : ''}}"
+        bindtap="capture"
+        aria-role="button"
+        aria-label="{{shooting ? '正在生成照片' : '拍下当前造型'}}"
+        aria-disabled="{{shooting}}"
+      >
+        <view class="shutter-ring"></view>
+        <view class="shutter-core"></view>
+      </view>
+
+      <view
+        class="shutter-side"
+        bindtap="goHistory"
+        aria-role="button"
+        aria-label="查看试戴记录"
+      >
+        <text class="shutter-side-icon" aria-hidden="true">▤</text>
+        <text class="shutter-side-text">记录</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 合成用离屏画布 -->
+  <canvas type="2d" id="composeCanvas" class="compose-canvas"></canvas>
+
+  <!-- 详情弹层 -->
+  <!-- 遮罩本身可点（点空白处关闭），读屏需要知道它是什么 -->
+  <view wx:if="{{showInfo}}" class="sheet-mask" bindtap="closeInfo" aria-role="button" aria-label="关闭发型详情">
+    <view class="sheet" catchtap="noop">
+      <view class="sheet-handle"></view>
+      <text class="sheet-title">{{info.name}}</text>
+      <text class="sheet-en">{{info.en}}</text>
+      <view class="sheet-tags">
+        <text class="tag">{{info.tag}}</text>
+        <text class="tag">{{info.face}}</text>
+      </view>
+      <!-- 描述区单独可滚：弹层限高 82vh，描述再长也是这块自己滚，
+           底部按钮永远够得着 -->
+      <scroll-view scroll-y class="sheet-scroll" enhanced="{{true}}" show-scrollbar="{{false}}">
+        <text class="sheet-desc">{{info.desc}}</text>
+      </scroll-view>
+      <view class="hr"></view>
+      <view class="sheet-meta">
+        <view class="meta-item">
+          <text class="meta-label">当前发色</text>
+          <text class="meta-value">{{currentColorName}}</text>
+        </view>
+        <view class="meta-item">
+          <text class="meta-label">识脸状态</text>
+          <!-- 三态。以前只有「已锁定 / 手动定位」两态，没识到脸也没手动时
+               会显示「手动定位」—— 又是一句不实的说明。 -->
+          <text class="meta-value">{{faceFound ? '已锁定' : (manualOn ? '手动定位' : '未识别到')}}</text>
+        </view>
+      </view>
+      <button class="btn btn-main sheet-btn" bindtap="closeInfo">继续试戴</button>
+    </view>
+  </view>
+
+  <!-- 首次使用引导。
+       新用户从二维码进来点「开始试戴」，看到的是相机画面 + 一个发型 + 一排控件，
+       没有任何一行字告诉他「要把脸放进画面」「可以左右滑」「可以拖」。
+       前 38 轮都在打磨老用户会碰到的东西，这一层是给第一次来的人补的。
+       只在第一次显示，关掉后写标记，之后不再出现。 -->
+  <view wx:if="{{guideOn}}" class="guide-mask" bindtap="closeGuide"
+    aria-role="button" aria-label="关闭新手指引">
+    <view class="guide-card" catchtap="noop">
+      <text class="guide-title">三步就能看到新发型</text>
+      <view class="guide-row">
+        <text class="guide-num">1</text>
+        <text class="guide-text">把头放进中间的虚线框，发型会跟着你的脸走</text>
+      </view>
+      <view class="guide-row">
+        <text class="guide-num">2</text>
+        <text class="guide-text">左右滑动下方发型条换款，色卡换发色</text>
+      </view>
+      <view class="guide-row">
+        <text class="guide-num">3</text>
+        <text class="guide-text">位置不准就拖动微调，双击画面复位</text>
+      </view>
+      <button class="btn btn-main guide-btn" bindtap="closeGuide">知道了</button>
+    </view>
+  </view>
+
+  <!-- 轻提示 -->
+  <!-- toast 是唯一告知结果的通道（已保存 / 已收藏 / 生成失败）。
+       它 1.8 秒后自己消失，读屏用户如果没有 assertive 播报，
+       等于什么都没发生。 -->
+  <view wx:if="{{toast}}" class="toast" aria-role="alert" aria-live="assertive">{{toast}}</view>
+
+  <!-- 隐私授权。放最后 = 层级最高，压在所有浮层上面 -->
+  <privacy-gate
+    show="{{privacyOn}}"
+    contract-name="{{privacyContract}}"
+    confirm-text="同意并开启相机"
+    bind:agree="onPrivacyAgree"
+    bind:cancel="onPrivacyCancel"
+  />
+</view>

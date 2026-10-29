@@ -1,0 +1,28 @@
+# ---------- 依赖 ----------
+node_modules/
+package-lock.json
+
+# ---------- 微信开发者工具 ----------
+project.private.config.json
+miniprogram_npm/
+.wxsscache/
+
+# ---------- WorkBuddy 工具数据（含本地绝对路径） ----------
+.workbuddy-ai/
+.wbapp_*.genie
+.wbapp_*.privacy.json
+
+# ---------- 渲染调试产物 ----------
+# 截图是本地验证用的，一次几十张、每张 1~2MB，不进仓库。
+# 需要看图时本地重跑 tests/canvas-shot.js 即可。
+tests/*.png
+tests/out/
+tests/shot.html
+
+# ---------- 临时探针 ----------
+tests/_*.js
+
+# ---------- 系统 ----------
+.DS_Store
+Thumbs.db
+*.log

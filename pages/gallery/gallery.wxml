@@ -1,0 +1,69 @@
+<view class="page">
+  <view class="head" style="padding-top: {{topPad}}px;">
+    <view class="head-top">
+      <text class="h1">发型库</text>
+      <text class="count">{{total}} 款</text>
+    </view>
+    <text class="head-desc">先挑一款，再进镜子看真实效果</text>
+
+    <view class="preview-bar">
+      <text class="preview-label">预览发色</text>
+      <!-- catchtouchstart/move：横滑色带时不要顺手切换预览发色 -->
+      <scroll-view
+        scroll-x
+        class="preview-scroll"
+        enhanced="{{true}}"
+        show-scrollbar="{{false}}"
+        catchtouchstart="onPreviewTouchStart"
+        catchtouchmove="onPreviewTouchMove"
+        bindtouchcancel="onPreviewTouchCancel"
+      >
+        <view class="preview-inner">
+          <view
+            wx:for="{{colors}}"
+            wx:key="id"
+            class="sw {{previewColor === item.id ? 'on' : ''}}"
+            data-id="{{item.id}}"
+            bindtap="pickPreviewColor"
+            aria-role="button"
+            aria-label="预览发色 {{item.name}}{{previewColor === item.id ? '，已选中' : ''}}"
+          >
+            <view class="sw-fill" style="background: {{item.swatch}};"></view>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view class="grid">
+    <view
+      wx:for="{{styles}}"
+      wx:key="id"
+      class="cell"
+      data-id="{{item.id}}"
+      bindtap="openStyle"
+      bindlongpress="toggleFav"
+      aria-role="button"
+      aria-label="{{item.name}}，{{item.tag}}，{{item.face}}{{item.fav ? '，已收藏' : ''}}"
+    >
+      <view class="cell-visual">
+        <image class="cell-thumb" src="{{item.thumb}}" mode="aspectFit" />
+        <!-- 收藏角标是装饰：卡片本身的 aria-label 已经念过「已收藏」，
+             再念一次星星等于重复播报 -->
+        <view wx:if="{{item.fav}}" class="cell-fav" aria-hidden="true">★</view>
+        <view class="cell-tag">{{item.tag}}</view>
+      </view>
+      <view class="cell-info">
+        <text class="cell-name">{{item.name}}</text>
+        <text class="cell-face">{{item.face}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="grid-note">
+    <text>缩略图为示意效果，实际效果受发量、脸型与发质影响</text>
+    <text class="grid-note-dim">长按卡片可收藏</text>
+  </view>
+
+  <view class="safe-bottom"></view>
+</view>

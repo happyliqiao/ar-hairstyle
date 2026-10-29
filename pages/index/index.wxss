@@ -1,0 +1,380 @@
+.page {
+  height: 100vh;
+  background: var(--bg);
+  /* 显式写 padding: 0：app.wxss 的 .page 有 32rpx 左右留白，
+     首页是通栏版式，不覆盖会多出一圈边。 */
+  padding: 0;
+}
+
+/* ---------------- Hero ---------------- */
+.hero {
+  position: relative;
+  padding: 48rpx 40rpx 56rpx 40rpx;
+  overflow: hidden;
+}
+
+.hero-glow {
+  position: absolute;
+  top: -260rpx;
+  right: -180rpx;
+  width: 620rpx;
+  height: 620rpx;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(224, 168, 111, 0.30) 0%, rgba(224, 168, 111, 0) 68%);
+  pointer-events: none;
+}
+
+.hero-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.045) 2rpx, transparent 2rpx),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 2rpx, transparent 2rpx);
+  background-size: 72rpx 72rpx;
+}
+
+.hero-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 64rpx;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-mark {
+  font-size: 38rpx;
+  font-weight: 700;
+  letter-spacing: 6rpx;
+  color: #f2f0ee;
+}
+
+.brand-sub {
+  font-size: 17rpx;
+  letter-spacing: 4rpx;
+  color: rgba(255, 255, 255, 0.45);
+  margin-top: 2rpx;
+}
+
+.shop-pill {
+  font-size: 21rpx;
+  color: var(--gold);
+  padding: 8rpx 20rpx;
+  border-radius: 24rpx;
+  background: var(--gold-soft);
+  border: 2rpx solid rgba(224, 168, 111, 0.28);
+}
+
+.hero-copy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 44rpx;
+}
+
+.hero-title {
+  font-size: 84rpx;
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: 2rpx;
+  color: #f7f5f2;
+}
+
+.hero-title:nth-child(2) {
+  color: var(--gold);
+}
+
+.hero-desc {
+  margin-top: 28rpx;
+  font-size: 27rpx;
+  line-height: 1.7;
+  color: #9b9aa8;
+  max-width: 540rpx;
+}
+
+.hero-cta {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 108rpx;
+  padding: 0 44rpx;
+  border-radius: 54rpx;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 50%, var(--gold-deep) 100%);
+  box-shadow: 0 16rpx 44rpx rgba(224, 168, 111, 0.30);
+}
+
+.hero-cta:active {
+  opacity: 0.88;
+}
+
+.hero-cta-text {
+  font-size: 33rpx;
+  font-weight: 700;
+  color: #1a1208;
+  letter-spacing: 1rpx;
+}
+
+.hero-cta-arrow {
+  font-size: 38rpx;
+  color: #1a1208;
+  font-weight: 700;
+}
+
+.hero-meta {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-top: 48rpx;
+  padding-top: 36rpx;
+  border-top: 2rpx solid rgba(255, 255, 255, 0.08);
+}
+
+.meta-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4rpx;
+}
+
+.meta-num {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #f2f0ee;
+  line-height: 1.1;
+}
+
+.meta-div {
+  width: 2rpx;
+  height: 44rpx;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 28rpx;
+}
+
+/* ---------------- 热门 ---------------- */
+.hot-strip {
+  width: 100%;
+  white-space: nowrap;
+  margin: 0 -32rpx;
+  width: calc(100% + 64rpx);
+}
+
+.hot-inner {
+  display: inline-flex;
+  gap: 20rpx;
+  padding: 0 32rpx;
+}
+
+.hot-card {
+  width: 216rpx;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hot-visual {
+  position: relative;
+  width: 216rpx;
+  height: 268rpx;
+  border-radius: 24rpx;
+  background: linear-gradient(160deg, #1f1f2c 0%, #14141d 100%);
+  border: 2rpx solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.hot-thumb {
+  width: 160rpx;
+  height: 192rpx;
+}
+
+.hot-badge {
+  position: absolute;
+  left: 14rpx;
+  top: 14rpx;
+  font-size: 18rpx;
+  color: #1a1208;
+  background: rgba(224, 168, 111, 0.92);
+  padding: 4rpx 12rpx;
+  border-radius: 12rpx;
+  font-weight: 600;
+}
+
+.hot-name {
+  margin-top: 16rpx;
+  font-size: 27rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+}
+
+.hot-face {
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ---------------- 发色墙 ---------------- */
+.color-wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+}
+
+.color-chip {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 12rpx 22rpx 12rpx 12rpx;
+  border-radius: 40rpx;
+  background: var(--surface);
+  border: 2rpx solid rgba(255, 255, 255, 0.07);
+}
+
+.color-chip:active {
+  border-color: rgba(224, 168, 111, 0.6);
+}
+
+.color-chip-dot {
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  border: 2rpx solid rgba(255, 255, 255, 0.16);
+}
+
+.color-chip-name {
+  font-size: 23rpx;
+  color: #cfcdd8;
+}
+
+/* ---------------- 门店 ---------------- */
+.shop-card {
+  padding: 36rpx 32rpx;
+  border-radius: 28rpx;
+  background: linear-gradient(155deg, #1c1c28 0%, #13131c 100%);
+  border: 2rpx solid rgba(255, 255, 255, 0.07);
+}
+
+.shop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 28rpx;
+}
+
+.shop-name-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4rpx;
+}
+
+.shop-name {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #f2f0ee;
+}
+
+.shop-branch {
+  font-size: 22rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.shop-open {
+  font-size: 20rpx;
+  color: #6fcf97;
+  background: rgba(111, 207, 151, 0.12);
+  padding: 6rpx 16rpx;
+  border-radius: 16rpx;
+  flex-shrink: 0;
+}
+
+/* 已休息：用中性灰而不是警告红 —— 打烊不是异常状态，
+   用红色会让用户以为出错了 */
+.shop-open.is-closed {
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 边界时间比主状态淡一级，别抢「营业中」的注意力 */
+.shop-open-hint {
+  font-size: 18rpx;
+  opacity: 0.72;
+}
+
+.shop-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  margin-bottom: 32rpx;
+}
+
+.shop-line {
+  display: flex;
+  gap: 24rpx;
+}
+
+.shop-line-k {
+  width: 64rpx;
+  font-size: 23rpx;
+  color: rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+}
+
+.shop-line-v {
+  font-size: 24rpx;
+  color: #c4c2cf;
+  flex: 1;
+}
+
+.shop-actions {
+  display: flex;
+  gap: 18rpx;
+}
+
+.shop-btn {
+  flex: 1;
+  /* 80rpx(40pt) 略低于 44pt 建议值，提到 88rpx */
+  height: 88rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 44rpx;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #d8d6e2;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2rpx solid rgba(255, 255, 255, 0.09);
+}
+
+.shop-btn.is-primary {
+  background: rgba(224, 168, 111, 0.16);
+  border-color: rgba(224, 168, 111, 0.45);
+  color: var(--gold);
+}
+
+/* ---------------- 页脚 ---------------- */
+.footer-note {
+  padding: 8rpx 40rpx 24rpx 40rpx;
+  text-align: center;
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.6;
+}
+
+/* 微信原生 tabBar 已自动避让 iPhone 底部横条，
+   app.wxss 里 .safe-bottom 的 env(safe-area-inset-bottom) 在这里
+   会变成第二层留白，iPhone X 以上多出约 34px。
+   tabBar 页只保留一个小间距就够。 */
+.safe-bottom {
+  padding-bottom: 24rpx;
+}

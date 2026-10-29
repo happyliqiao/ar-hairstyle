@@ -1,0 +1,22 @@
+<view wx:if="{{show}}" class="pg-mask" catchtap="noop" aria-role="dialog" aria-label="隐私授权">
+  <view class="pg-card">
+    <view class="pg-icon">◎</view>
+    <text class="pg-title">开启摄像头前，需要你的同意</text>
+    <text class="pg-desc">{{explain}}</text>
+
+    <text class="pg-link" bindtap="openContract" aria-role="button" aria-label="查看隐私保护指引">
+      查看《{{contractName || '小程序用户隐私保护指引'}}》›
+    </text>
+
+    <button
+      id="pg-agree"
+      class="pg-btn pg-btn-main"
+      open-type="agreePrivacyAuthorization"
+      bindagreeprivacyauthorization="onAgree"
+      bindtap="onAgree"
+    >{{confirmText}}</button>
+
+    <view wx:if="{{showCancel}}" class="pg-btn pg-btn-ghost" bindtap="onCancel"
+      aria-role="button" aria-label="暂不同意">暂不</view>
+  </view>
+</view>

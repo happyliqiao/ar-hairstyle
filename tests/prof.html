@@ -1,0 +1,2413 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>r</title></head><body><script>var module = { exports: {} };
+/**
+ * 发丝级发型渲染引擎
+ *
+ * 纯几何计算模块，不依赖 canvas / wx，可同时在
+ *   1) 小程序 Canvas 2D（实时渲染 + 离屏烘焙）
+ *   2) Node 测试环境（SVG 序列化 + 数值自检）
+ * 两个后端复用同一份几何数据。
+ *
+ * 设计要点：
+ * - 种子随机（mulberry32）：同一款发型每次生成的发丝分布完全一致，
+ *   否则实时预览时每帧发丝都会抖动。
+ * - 发束（lock）→ 细发丝（strand）两层结构：
+ *   发束决定整体流向与体量，细发丝提供表面质感。手写 150 条贝塞尔不现实，
+ *   所以只定义 10~18 条发束，再沿法线展开成细发丝。
+ * - 每条细发丝是「锥形多边形」而非等宽描边：根部粗、梢部收成针尖，
+ *   这是真实头发最关键的形态特征。
+ * - 明暗不是整体贴一层白，而是按每条发丝的**空间位置**相对光源计算色调，
+ *   形成自然的体积感。
+ */
+
+/* ============================================================
+ * 一、种子随机
+ * ============================================================ */
+
+/** FNV-1a 字符串哈希，用来把 styleId 变成稳定的种子 */
+function hashStr(s) {
+  var h = 2166136261 >>> 0
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619) >>> 0
+  }
+  return h >>> 0
+}
+
+/** mulberry32：小、快、分布好，同种子必然同序列 */
+function mulberry32(seed) {
+  var a = seed >>> 0
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0
+    var t = a
+    t = Math.imul(t ^ (t >>> 15), 1 | t)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/* ============================================================
+ * 二、颜色工具
+ * ============================================================ */
+
+function hex2rgb(h) {
+  var s = h.charAt(0) === '#' ? h.slice(1) : h
+  if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2]
+  var n = parseInt(s, 16)
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+}
+
+function clamp255(v) {
+  return v < 0 ? 0 : v > 255 ? 255 : Math.round(v)
+}
+
+function hex2(n) {
+  var s = n.toString(16)
+  return s.length < 2 ? '0' + s : s
+}
+
+function rgb2hex(r, g, b) {
+  return '#' + hex2(clamp255(r)) + hex2(clamp255(g)) + hex2(clamp255(b))
+}
+
+/** 线性插值两个颜色，t=0 取 a，t=1 取 b */
+function mixHex(a, b, t) {
+  var A = hex2rgb(a)
+  var B = hex2rgb(b)
+  return rgb2hex(
+    A.r + (B.r - A.r) * t,
+    A.g + (B.g - A.g) * t,
+    A.b + (B.b - A.b) * t
+  )
+}
+
+/** amt > 0 向白色提亮，amt < 0 向黑色压暗 */
+function shade(hex, amt) {
+  return amt >= 0 ? mixHex(hex, '#ffffff', amt) : mixHex(hex, '#000000', -amt)
+}
+
+/** 加透明度，输出 rgba() 字符串 */
+function rgba(hex, a) {
+  var c = hex2rgb(hex)
+  return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + a + ')'
+}
+
+/**
+ * 由基色 + 高光色推导出完整的 6 阶色板。
+ * 真实头发从发根到发梢、从背光到迎光，色调跨度远大于「两色渐变」，
+ * 必须显式建模，否则看起来就是一块塑料。
+ */
+function buildRamp(base, sheenTint) {
+  var sheen = sheenTint || shade(base, 0.56)
+  return {
+    shadow: shade(base, -0.62),
+    deep: shade(base, -0.34),
+    base: base,
+    mid: shade(base, 0.18),
+    tip: shade(base, 0.36),
+    sheen: sheen,
+    rim: shade(sheen, 0.34),
+    swatch: base
+  }
+}
+
+/**
+ * 色调值 tone ∈ [-1, 1] → 具体颜色（连续插值）
+ * tone: -1 最暗（发根/背光）… 0 基调 … +1 最强高光
+ */
+var TONE_STOPS = [-1.0, -0.5, 0.0, 0.36, 0.7, 1.0]
+function toneColor(ramp, tone) {
+  var t = tone < -1 ? -1 : tone > 1 ? 1 : tone
+  var keys = [ramp.shadow, ramp.deep, ramp.base, ramp.mid, ramp.tip, ramp.sheen]
+  for (var i = 0; i < TONE_STOPS.length - 1; i++) {
+    if (t <= TONE_STOPS[i + 1]) {
+      var span = TONE_STOPS[i + 1] - TONE_STOPS[i]
+      var u = span === 0 ? 0 : (t - TONE_STOPS[i]) / span
+      return mixHex(keys[i], keys[i + 1], u)
+    }
+  }
+  return keys[keys.length - 1]
+}
+
+/* ============================================================
+ * 三、贝塞尔与路径采样
+ * ============================================================ */
+
+/** 椭圆上某角度对应的点（角度用弧度，canvas 坐标系 y 向下） */
+function ptOn(cx, cy, rx, ry, a) {
+  return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]
+}
+
+/** 三次贝塞尔求点，p = [x0,y0, x1,y1, x2,y2, x3,y3] */
+function bez(p, t) {
+  var mt = 1 - t
+  var a = mt * mt * mt
+  var b = 3 * mt * mt * t
+  var c = 3 * mt * t * t
+  var d = t * t * t
+  return {
+    x: a * p[0] + b * p[2] + c * p[4] + d * p[6],
+    y: a * p[1] + b * p[3] + c * p[5] + d * p[7]
+  }
+}
+
+/** 三次贝塞尔求切向 */
+function bezD(p, t) {
+  var mt = 1 - t
+  var a = 3 * mt * mt
+  var b = 6 * mt * t
+  var c = 3 * t * t
+  return {
+    x: a * (p[2] - p[0]) + b * (p[4] - p[2]) + c * (p[6] - p[4]),
+    y: a * (p[3] - p[1]) + b * (p[5] - p[3]) + c * (p[7] - p[5])
+  }
+}
+
+/**
+ * 采样一条发束中心线，返回带单位法线的点序列。
+ * wave 让发丝沿法线做正弦摆动（大波浪、羊毛卷靠它成形）。
+ */
+function sampleCurve(p, n, wave) {
+  var out = []
+  var last = n - 1
+  for (var i = 0; i < n; i++) {
+    var t = last === 0 ? 0 : i / last
+    var pos = bez(p, t)
+    var d = bezD(p, t)
+    var len = Math.sqrt(d.x * d.x + d.y * d.y) || 1
+    var nx = -d.y / len
+    var ny = d.x / len
+    var x = pos.x
+    var y = pos.y
+    if (wave) {
+      // 摆动幅度随 t 增大（发根不摆，发梢摆得厉害）
+      var env = Math.pow(t, wave.power == null ? 0.7 : wave.power)
+      var off = wave.amp * Math.sin(t * Math.PI * 2 * wave.freq + (wave.phase || 0)) * env
+      x += nx * off
+      y += ny * off
+    }
+    out.push({ x: x, y: y, nx: nx, ny: ny, t: t })
+  }
+  return out
+}
+
+/**
+ * 采样一组路径指令（M / L / C / Z），按固定步数均匀取点。
+ * 用于沿轮廓生成「边缘破碎发丝」和「边缘光」。
+ */
+function sampleOps(ops, perSegment) {
+  var pts = []
+  var cur = null
+  var per = perSegment || 6
+  for (var i = 0; i < ops.length; i++) {
+    var op = ops[i]
+    var t = op[0]
+    if (t === 'M') {
+      cur = { x: op[1], y: op[2] }
+    } else if (t === 'L' && cur) {
+      for (var k = 0; k <= per; k++) {
+        var u = k / per
+        pts.push({ x: cur.x + (op[1] - cur.x) * u, y: cur.y + (op[2] - cur.y) * u })
+      }
+      cur = { x: op[1], y: op[2] }
+    } else if (t === 'C' && cur) {
+      var p = [cur.x, cur.y, op[1], op[2], op[3], op[4], op[5], op[6]]
+      for (var j = 1; j <= per; j++) {
+        var v = bez(p, j / per)
+        pts.push({ x: v.x, y: v.y })
+      }
+      cur = { x: op[5], y: op[6] }
+    }
+  }
+  // 补法线
+  for (var m = 0; m < pts.length; m++) {
+    var a = pts[m === 0 ? 0 : m - 1]
+    var b = pts[m === pts.length - 1 ? m : m + 1]
+    var dx = b.x - a.x
+    var dy = b.y - a.y
+    var len = Math.sqrt(dx * dx + dy * dy) || 1
+    pts[m].nx = -dy / len
+    pts[m].ny = dx / len
+  }
+  return pts
+}
+
+/* ============================================================
+ * 四、发束生成器
+ * ============================================================ */
+
+/** 把一条发束的贝塞尔控制点沿 x=100 镜像 */
+function mirrorLock(p) {
+  return [200 - p[0], p[1], 200 - p[2], p[3], 200 - p[4], p[5], 200 - p[6], p[7]]
+}
+
+/** 确定性伪随机：不依赖 rng 状态，同样入参永远同样结果 */
+function wob(i, seed) {
+  var x = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453
+  return x - Math.floor(x)
+}
+
+/**
+ * 冠部发束：从分缝/头顶一片小弧，扇形铺到发际线弧。
+ * 这一层决定「头发是从哪里长出来、往哪个方向梳」。
+ *
+ * 两个内建修正，避免每处调用都手写：
+ * 1) start 弧强制一个最小宽度 —— 所有发束汇聚到一个点，会在头顶留下
+ *    放射状的"蜘蛛"痕迹，真实头发是从一条带子上长出来的。
+ * 2) 发梢做确定性抖动 —— 否则发际线会像刀切的一样齐。
+ */
+function crownLocks(o) {
+  var out = []
+  var n = o.count
+  var start = o.start
+  var end = o.end
+  var bulge = o.bulge == null ? 0.16 : o.bulge
+  var endJitter = o.endJitter == null ? 6 : o.endJitter
+  var srx = Math.max(start.rx, 12)
+  var sry = Math.max(start.ry, 5)
+  for (var i = 0; i < n; i++) {
+    var u = n === 1 ? 0.5 : i / (n - 1)
+    var a = start.a0 + (start.a1 - start.a0) * u
+    var b = end.a0 + (end.a1 - end.a0) * u
+    var r = ptOn(start.cx, start.cy, srx * (0.78 + wob(i, 3) * 0.52), sry * (0.8 + wob(i, 4) * 0.45), a)
+    var t = ptOn(end.cx, end.cy, end.rx, end.ry, b)
+    if (endJitter) {
+      t[0] += (wob(i, 1) - 0.5) * endJitter * 0.6
+      t[1] += (wob(i, 2) - 0.5) * endJitter
+    }
+    var dx = t[0] - r[0]
+    var dy = t[1] - r[1]
+    // 控制点沿法线外推，让发束鼓出弧线而不是直线
+    var nx = -dy
+    var ny = dx
+    var nl = Math.sqrt(nx * nx + ny * ny) || 1
+    nx /= nl
+    ny /= nl
+    var push = Math.sqrt(dx * dx + dy * dy) * bulge
+    var p = [
+      r[0], r[1],
+      r[0] + dx * 0.35 + nx * push, r[1] + dy * 0.35 + ny * push,
+      r[0] + dx * 0.72 + nx * push * 0.6, r[1] + dy * 0.72 + ny * push * 0.6,
+      t[0], t[1]
+    ]
+    out.push({
+      p: p,
+      w: o.width,
+      n: o.fine,
+      tone: o.tone || 0,
+      conv: o.conv,
+      // 每条发束错开相位，波浪才会互相交错而不是整体平移
+      wave: o.wave
+        ? {
+            amp: o.wave.amp,
+            freq: o.wave.freq,
+            phase: (o.wave.phase || 0) + u * 2.4,
+            power: o.wave.power
+          }
+        : undefined
+    })
+  }
+  return out
+}
+
+/**
+ * 面板发束：在两条引导曲线之间铺满发束。
+ *
+ * 侧边头发本质上是一「块」面板，用内/外两条引导曲线夹住它，
+ * 中间按 u 线性插值控制点生成发束，就能精确铺满整块面板。
+ * 用弧线 + 外扩系数做不到这一点 —— 那样发束会全挤在中间，
+ * 面板靠近脸的一侧和靠外的一侧都会裸露，渲染出来就是一块平板。
+ *
+ * @param {object} o
+ *   inner / outer: [x0,y0, c1x,c1y, c2x,c2y, x3,y3] 三次贝塞尔
+ */
+function panelLocks(o) {
+  var inner = o.inner
+  var outer = o.outer
+  var out = []
+  for (var i = 0; i < o.count; i++) {
+    var u = o.count === 1 ? 0.5 : i / (o.count - 1)
+    // 轻微非线性：让发束在外侧更密一点，符合真实头发的分布
+    var uu = Math.pow(u, o.curvePow == null ? 1 : o.curvePow)
+    var p = []
+    for (var k = 0; k < 8; k++) p.push(inner[k] + (outer[k] - inner[k]) * uu)
+    // 发梢参差：齐发尾如果完全平齐会像假发片，真实剪裁总有几毫米的差异
+    var jt = o.tipJitter == null ? 3.4 : o.tipJitter
+    if (jt) {
+      p[7] += (wob(i, 5) - 0.5) * jt
+      p[5] += (wob(i, 6) - 0.5) * jt * 0.6
+    }
+    // 每条发束给不同的波浪相位。如果整个面板共用一个相位，
+    // 所有发束会整体一起摆动 —— 形状上完全看不出来，只是整块平移。
+    // 相位错开之后才会互相交错，形成真正的波浪结构。
+    var wv = o.wave
+    if (wv) {
+      wv = {
+        amp: wv.amp,
+        freq: wv.freq,
+        phase: (wv.phase || 0) + uu * (o.phaseSpread == null ? 3.2 : o.phaseSpread),
+        power: wv.power
+      }
+    }
+    out.push({
+      p: p,
+      w: o.width,
+      n: o.fine,
+      tone: o.tone || 0,
+      conv: o.conv,
+      wave: wv
+    })
+  }
+  return out
+}
+
+/**
+ * 侧边垂落发束：从太阳穴/耳侧一片弧，向下垂到发梢线。
+ * toY 决定长度（波波头到下巴、长直到胸前），spread 决定发梢外扩程度。
+ */
+function sideLocks(o) {
+  var out = []
+  var n = o.count
+  var from = o.from
+  for (var i = 0; i < n; i++) {
+    var u = n === 1 ? 0.5 : i / (n - 1)
+    var a = from.a0 + (from.a1 - from.a0) * u
+    var r = ptOn(from.cx, from.cy, from.rx, from.ry, a)
+    var tipY = typeof o.toY === 'function' ? o.toY(u) : o.toY
+    var tipX = 100 + (r[0] - 100) * (o.spread == null ? 1.1 : o.spread)
+    // 中段向外鼓，模拟头发离开颅骨后的体量
+    var bulge = o.bulge == null ? 10 : o.bulge
+    var p = [
+      r[0], r[1],
+      r[0] + bulge, r[1] + (tipY - r[1]) * 0.22,
+      tipX + bulge * 0.35, tipY - (tipY - r[1]) * 0.30,
+      tipX, tipY
+    ]
+    if (o.side < 0) p = mirrorLock(p)
+    out.push({
+      p: p,
+      w: o.width,
+      n: o.fine,
+      tone: o.tone || 0,
+      wave: o.wave
+    })
+  }
+  return out
+}
+
+/* ============================================================
+ * 五、发束 → 细发丝
+ * ============================================================ */
+
+/**
+ * 沿法线把每条发束展开成多条细发丝。
+ * 细发丝的偏移量在发根处最大、向发梢收敛（真实头发的发丝是聚拢到发梢的）。
+ *
+ * 色调模型是真实感的核心，由 6 个物理直觉项叠加：
+ *   height  越高越受光（头顶亮、发梢暗）
+ *   ao      环境光遮蔽：贴着脸的那一圈最暗
+ *   tip     发梢透光（光穿过发丝末端）
+ *   spec    镜面高光：只在光泽带附近，衰减很陡
+ *   valley  发束边缘压暗 → 形成发束之间的暗谷，这是最关键的一项
+ *   lockBias 每条发束一个固定偏移 → 相邻发束明暗相间
+ */
+function expand(locks, rng, opt) {
+  var scale = opt && opt.scale != null ? opt.scale : 1
+  var samples = (opt && opt.samples) || 10
+  var sheen = (opt && opt.sheen) || { x: 72, y: 54, r: 52 }
+  var out = []
+
+  for (var li = 0; li < locks.length; li++) {
+    var lock = locks[li]
+    var center = sampleCurve(lock.p, samples, lock.wave)
+    var count = Math.max(1, Math.round((lock.n || 5) * scale))
+    var lockW = lock.w[0]
+    // 每条发束一个稳定亮度偏移 —— 相邻发束明暗相间。
+    // 这个值必须很小：发束内所有发丝共享它，一旦超过 ±0.12，
+    // 整条发束就变成一条纯色带，十几种发束并排就是「条形码」。
+    // 大范围的明暗应该由 diffuse 承担，发束只做轻微分组。
+    var lockBias = (rng() - 0.5) * 0.20
+    // 本发束的噪声相位：同一条发束共用，保证横向亮度是连续变化的
+    var lockSeed = rng() * 6.2832
+
+    for (var i = 0; i < count; i++) {
+      var u = count === 1 ? 0 : (i / (count - 1)) * 2 - 1
+      var jit = (rng() - 0.5) * 0.34
+      var off = (u + jit) * lockW * 0.5
+      // 宽度略大于间距：逐根波动会把相邻发丝拉开，留 12% 重叠才不会露出暗底。
+      // 但也不能太大 —— 乘 1.45 会让每条发丝粗到肉眼能数清，那是「描线」不是「头发」；
+      // 真实头发是靠极细 + 极密 + 逐根随机明暗堆出质感的。
+      var sw = (lockW / count) * 1.12 * (0.82 + rng() * 0.42)
+
+      // 逐根发丝的亮度抖动，拆成两部分：
+      //   一部分只跟发丝在发束里的位置 u 有关（相邻发丝取值接近，形成连续过渡），
+      //   另一部分才是纯随机（提供细碎颗粒）。
+      // 如果整项都做成纯随机，相邻发丝的明暗会毫无规律地跳变，
+      // 一片片并排起来就是「条形码」—— 这是刘海最难去掉的塑料感来源。
+      var grainPos = Math.sin(u * 1.9 + lockSeed) * 0.55 + Math.sin(u * 4.7 + lockSeed * 2.3) * 0.3
+      var grain = grainPos * 0.20 + (rng() - 0.5) * 0.17
+
+      // 每根发丝自己的波动相位、频率、幅度。
+      // 之前整条发束共用一条引导曲线，所有发丝只是沿法线平移，
+      // 于是变成一排严格平行的线 —— 这才是「条形码」感的真正来源，
+      // 光调明暗是治不好的。真实头发的每根发丝都有独立的卷曲相位，
+      // 彼此交叉、分开、再合拢，视觉上才有「绒」的质感。
+      var ph = rng() * 6.2832
+      var freq = 0.6 + rng() * 1.6
+      var amp = lockW * (0.05 + rng() * 0.13)
+
+      var pts = []
+      var convAmt = lock.conv == null ? 0.52 : lock.conv
+      for (var k = 0; k < center.length; k++) {
+        var t = center[k].t
+        // 发束向发梢收敛的程度。短发收敛强（一束束很清楚），
+        // 长发必须收敛弱 —— 收敛太强会在发束之间留出竖向暗缝，
+        // 长发看起来就变成一根一根的绳子了。
+        var conv = 1 - convAmt * t
+        // 发根固定在头皮上，所以波动幅度按 t 放大，只在后半段散开
+        var wob = Math.sin(t * 6.2832 * freq + ph) * amp * (0.18 + 0.82 * t)
+        var offK = off * conv + wob
+        pts.push({
+          x: center[k].x + center[k].nx * offK,
+          y: center[k].y + center[k].ny * offK,
+          nx: center[k].nx,
+          ny: center[k].ny,
+          t: t
+        })
+      }
+
+      var mid = pts[Math.floor(pts.length * 0.45)]
+      var last = pts[pts.length - 1]
+
+      var valley = -Math.pow(Math.abs(u), 1.8) * 0.26
+      var baseTone = (lock.tone || 0) + lockBias + valley + grain
+
+      // 把「某一点受多少光」抽成函数：整根发丝一次算完是最省事的，
+      // 但真实发丝从根到梢跨越了头部曲面的不同朝向，受光一直在变。
+      // 整根同色会变成一条条死板的长线，所以后面按段分别取样。
+      function shadeAt(p) {
+        // --- 漫反射：用「发丝相对头部中心的径向位置」近似表面法线 ---
+        // 之前用「高度」当受光量是错的：刘海在头部的位置很低，但它正对观察者，
+        // 物理上是全脸最受光的地方，用高度算会把它压成一条死黑的横带。
+        // 这里把头部近似成椭球，nx/ny 是法线的水平/垂直分量，
+        // nz 由 1 - nx² - ny² 推出（球面约束），再用左上偏前的方向做点积。
+        var rx3 = (p.x - 100) / 60
+        var ry3 = (p.y - 118) / 76
+        var rr = rx3 * rx3 + ry3 * ry3
+        // 椭球外的头发（马尾、披在肩上的长发）必须把方向投影回椭球面，
+        // 而不是把法线清零。清零会让整条马尾得到一个恒定的暗值，
+        // 于是一大团头发没有任何明暗变化，变成一块黑布。
+        var nz
+        if (rr > 1) {
+          var inv = 1 / Math.sqrt(rr)
+          rx3 *= inv
+          ry3 *= inv
+          nz = 0
+        } else {
+          nz = Math.sqrt(1 - rr)
+        }
+        var diff = -rx3 * 0.46 - ry3 * 0.50 + nz * 0.73
+        if (diff < 0) diff = 0
+        // 增益和偏置决定整体明暗。偏置太小会一片死黑，
+        // 太大则深色头发被冲成灰白 —— 这一组值是反复对比截图调出来的。
+        var diffuse = diff * 0.72 - 0.13
+
+        // 环境光遮蔽：只压脸两侧（那里头发贴着面部、进不了光）
+        var aoY = p.y < 105 ? 0 : Math.min(1, (p.y - 105) / 34)
+        var ao = -Math.max(0, 1 - Math.abs(p.x - 100) / 72) * 0.16 * aoY
+
+        var tipTerm = 0.16 * Math.pow(p.t, 1.4)
+
+        // 主高光：真实头发的镜面反射是一条「宽而柔」的带，
+        // 指数 2.6 会把带压得太窄太硬，看起来像一道白漆刷上去。
+        // 降到 1.55 让高光横向铺开，再靠逐根发丝的明暗抖动把它打散成碎光。
+        var sdx = (p.x - sheen.x) / sheen.r
+        var sdy = (p.y - sheen.y) / (sheen.r * 0.82)
+        var sd = Math.sqrt(sdx * sdx + sdy * sdy)
+        var spec = sd >= 1 ? 0 : Math.pow(1 - sd, 1.55) * 0.64
+
+        // 次高光：位置更低、更弱。真实头发通常有两道反光，
+        // 只有一道会显得像塑料。
+        var sdx2 = (p.x - (sheen.x + 26)) / (sheen.r * 1.12)
+        var sdy2 = (p.y - (sheen.y + 64)) / (sheen.r * 1.35)
+        var sd2 = Math.sqrt(sdx2 * sdx2 + sdy2 * sdy2)
+        var spec2 = sd2 >= 1 ? 0 : Math.pow(1 - sd2, 1.9) * 0.28
+        if (spec2 > spec) spec = spec2
+
+        return diffuse + ao + tipTerm + spec
+      }
+
+      function clampTone(t) {
+        // 平滑压缩，不能用硬截断。
+        // 硬截断会让所有过曝的发丝同时停在 tone=1，于是它们被染成完全相同的
+        // 高光色 —— 在深色头发上就表现为一片片等亮的灰色「刮痕」。
+        // tanh 让高光平滑滚降：越亮的发丝仍然更亮，但不会挤成同一个色块。
+        return Math.tanh(t * 0.85)
+      }
+
+      var w0 = sw
+      var w1 = Math.max(0.1, sw * 0.09)
+
+      if (opt && opt.split && pts.length >= 8) {
+        // 沿长度切成两段分别取样受光。发梢段额外提亮一点：
+        // 光会穿过发丝末端，这是真实头发末端发虚发亮的原因。
+        var cut = Math.max(3, Math.round(pts.length * 0.46))
+        var segA = pts.slice(0, cut + 1)
+        var segB = pts.slice(cut)
+        var mA = segA[Math.floor(segA.length * 0.5)]
+        var mB = segB[Math.floor(segB.length * 0.5)]
+        out.push({
+          pts: segA,
+          w: [w0, w0 + (w1 - w0) * 0.55],
+          tone: clampTone(baseTone + shadeAt(mA)),
+          edge: Math.abs(u)
+        })
+        out.push({
+          pts: segB,
+          w: [w0 + (w1 - w0) * 0.55, w1],
+          tone: clampTone(baseTone + shadeAt(mB) + 0.05),
+          edge: Math.abs(u)
+        })
+      } else {
+        out.push({
+          pts: pts,
+          w: [w0, w1],
+          tone: clampTone(baseTone + shadeAt(mid)),
+          edge: Math.abs(u)
+        })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * 发丝 → 锥形多边形（左右两侧各一串点，首尾收拢成尖）
+ *
+ * 宽度沿长度用纺锤形，而不是「根部满宽、梢部收尖」的楔形。
+ * 楔形会让所有发根变成一个平头，当一排发束共用同一条起始弧时
+ * （刘海、发际线全是这种情况），这些平头一字排开就是一排小黑方块 ——
+ * 看起来像拉链齿，是最容易露馅的矢量痕迹之一。
+ */
+function polygon(s, samples) {
+  var pts = s.pts
+  var n = pts.length
+  var L = []
+  var R = []
+  for (var i = 0; i < n; i++) {
+    var t = n === 1 ? 0 : i / (n - 1)
+    // 前 20% 从 0 长到满宽（圆润的发根），之后缓慢收细，末端几乎归零。
+    // 注意不能拿梢宽 w[1] 当根部的下限 —— 那样根部就是一个 w[1] 宽的平头，
+    // 一排发束共用同一条起始弧（刘海、发际线全是这种情况）时，
+    // 这些平头一字排开就是一排小黑方块，像拉链齿。
+    var rise = Math.min(1, t / 0.2)
+    var prof = Math.pow(rise, 0.62) * (1 - Math.pow(t, 2.6) * 0.94)
+    var hw = s.w[0] * 0.5 * prof
+    var p = pts[i]
+    L.push([p.x + p.nx * hw, p.y + p.ny * hw])
+    R.push([p.x - p.nx * hw, p.y - p.ny * hw])
+  }
+  var out = L
+  for (var j = R.length - 1; j >= 0; j--) out.push(R[j])
+  return out
+}
+
+/**
+ * 沿轮廓生成「边缘破碎发丝」。
+ * 真实头发不会有一条矢量硬边，边缘一定是毛的。
+ * 这是提升真实感性价比最高的一步。
+ *
+ * face: {cx,cy,rx,ry} 脸部椭圆。用它做两件事：
+ *   1) 深陷脸内部的点直接跳过
+ *   2) 法线朝向脸部时缩短发丝 —— 刘海下沿、贴脸内轮廓都属于这种情况。
+ *      如果不缩短，这些位置会堆出一圈短毛，看起来像胡茬或者一道黑边。
+ *      朝外的轮廓线则保留全长，形成毛茸茸的边。
+ */
+function edgeStrands(ops, rng, opt) {
+  var pts = sampleOps(ops, opt && opt.perSegment ? opt.perSegment : 5)
+  if (!pts.length) return []
+  var out = []
+  var step = Math.max(1, Math.round((opt && opt.step) || 2))
+  var lenMin = (opt && opt.lenMin) || 2
+  var lenMax = (opt && opt.lenMax) || 7
+  var face = opt && opt.face
+
+  for (var i = 0; i < pts.length; i += step) {
+    var p = pts[i]
+    if (face) {
+      var ax = (p.x - face.cx) / face.rx
+      var ay = (p.y - face.cy) / face.ry
+      if (ax * ax + ay * ay < 0.5) continue
+    }
+    // 轮廓切线：取相邻采样点的方向。
+    // 边缘碎发必须「顺着发流」而不是「垂直于轮廓外戳」——
+    // 垂直外戳的短线段看起来就是一圈胡茬，是大波浪那版最刺眼的破绽。
+    var pv = pts[i > 0 ? i - 1 : i]
+    var pw = pts[i < pts.length - 1 ? i + 1 : i]
+    var tx = pw.x - pv.x
+    var ty = pw.y - pv.y
+    var tl = Math.sqrt(tx * tx + ty * ty)
+    if (tl < 0.001) {
+      tx = -p.ny
+      ty = p.nx
+      tl = 1
+    }
+    tx /= tl
+    ty /= tl
+
+    var count = (opt && opt.per) || 2
+    for (var j = 0; j < count; j++) {
+      var len = lenMin + rng() * (lenMax - lenMin)
+      var skew = (rng() - 0.5) * 0.9
+      // 切线为主、法线为辅：既有沿发流的走向，又略微探出轮廓打破硬边
+      var outAmt = 0.42 + rng() * 0.34
+      var nx = tx * 0.86 + p.nx * outAmt + skew * 0.16
+      var ny = ty * 0.86 + p.ny * outAmt + skew * 0.16
+      var nl = Math.sqrt(nx * nx + ny * ny) || 1
+      nx /= nl
+      ny /= nl
+
+      var inward = 0
+      if (face) {
+        var fx = face.cx - p.x
+        var fy = face.cy - p.y
+        var fl = Math.sqrt(fx * fx + fy * fy) || 1
+        inward = (nx * fx + ny * fy) / fl
+      }
+
+      // 发际线、贴脸内轮廓这些位置，发丝是「从皮肤里长出来、往发丛里走」的，
+      // 方向必须翻到背向脸部那一侧。
+      // 之前让它朝脸内戳，等于在额头上钉了一排深色短齿 —— 这是最难看的破绽。
+      var atFace = inward > 0.15
+      if (atFace) {
+        nx = -nx
+        ny = -ny
+        inward = -inward
+        len *= 0.62
+      }
+
+      var bend = (rng() - 0.5) * len * 0.7
+      // 贴脸的一圈是逆光绒发：皮肤比头发亮得多，所以这圈必须明显偏亮，
+      // 而且是极细的丝，密到看不出单根，只留一层柔和的过渡。
+      var baseTone = opt && opt.tone != null ? opt.tone : 0.2
+      var tone = atFace ? 0.72 + (rng() - 0.5) * 0.26 : baseTone + (rng() - 0.5) * 0.62
+      // 贴脸那圈必须细到亚像素级：宽度只要到 0.5 单位，
+      // 在手机屏幕上就是一根 1.5px 的实心黑条，一排排开就是「梳齿」。
+      var wRoot = atFace ? 0.1 + rng() * 0.18 : 0.5 + rng() * 0.85
+      // 贴脸的发丝整体收在发块一侧，只让尾尖轻轻探出边界，
+      // 探太多就会在额头上钉出一排短齿。
+      var tail = atFace ? 0.3 : 0.45
+      var s = {
+        pts: [
+          { x: p.x - nx * len * tail, y: p.y - ny * len * tail, nx: nx, ny: ny, t: 0 },
+          { x: p.x + nx * len * 0.3 + ny * bend, y: p.y + ny * len * 0.3 - nx * bend, nx: nx, ny: ny, t: 0.5 },
+          { x: p.x + nx * len, y: p.y + ny * len, nx: nx, ny: ny, t: 1 }
+        ],
+        w: [wRoot, 0.08],
+        tone: tone,
+        edge: 1
+      }
+      // 和主体发丝一致：平滑压缩而不是硬截断，否则亮部会挤成同一个色块
+      s.tone = Math.tanh(s.tone * 0.85)
+      out.push(s)
+    }
+  }
+  return out
+}
+
+/**
+ * 飞散发丝：从发型轮廓上挑起、脱出轮廓的几缕。
+ * 打破轮廓的完整性，是「真人头发」的关键细节。
+ *
+ * 必须从轮廓采样生成，不能在一个矩形框里随机撒点 ——
+ * 那样会有相当一部分落在脸上，变成满脸的乱线。
+ */
+function flyaways(ops, rng, opt) {
+  var pts = sampleOps(ops, opt && opt.perSegment ? opt.perSegment : 5)
+  var out = []
+  if (!pts.length) return out
+  var n = (opt && opt.count) || 14
+  var face = opt && opt.face
+  var lenMin = (opt && opt.lenMin) || 5
+  var lenMax = (opt && opt.lenMax) || 13
+
+  for (var i = 0; i < n; i++) {
+    var p = pts[Math.floor(rng() * pts.length)]
+    if (face) {
+      var ax = (p.x - face.cx) / face.rx
+      var ay = (p.y - face.cy) / face.ry
+      if (ax * ax + ay * ay < 0.92) continue
+    }
+    var len = lenMin + rng() * (lenMax - lenMin)
+    var skew = (rng() - 0.5) * 1.4
+    var nx = p.nx + skew * 0.5
+    var ny = p.ny + skew * 0.5
+    var nl = Math.sqrt(nx * nx + ny * ny) || 1
+    nx /= nl
+    ny /= nl
+    // 明显的外弯：飞发不会笔直伸出，末端总是勾一下
+    var curl = (rng() - 0.5) * len * 1.5
+    var sx = p.x - nx * len * 0.15
+    var sy = p.y - ny * len * 0.15
+    var ex = p.x + nx * len + ny * curl * 0.5
+    var ey = p.y + ny * len - nx * curl * 0.5
+    var c1x = p.x + nx * len * 0.45 - ny * curl * 0.5
+    var c1y = p.y + ny * len * 0.45 + nx * curl * 0.5
+    var c2x = p.x + nx * len * 0.8 + ny * curl * 0.8
+    var c2y = p.y + ny * len * 0.8 - nx * curl * 0.8
+    out.push({
+      pts: sampleCurve([sx, sy, c1x, c1y, c2x, c2y, ex, ey], 5, null),
+      w: [0.55 + rng() * 0.85, 0.08],
+      tone: 0.2 + rng() * 0.75,
+      edge: 1
+    })
+  }
+  return out
+}
+
+/**
+ * 卷发簇：在给定椭圆范围内撒一批短 S 形发束。
+ *
+ * 卷发靠"拉长一条发束再加正弦"是做不出来的 —— 那样只是波浪。
+ * 真正的卷发是大量短小、方向各异、互相叠压的小卷簇，
+ * 必须用独立的生成器撒，才能堆出羊毛卷那种颗粒感。
+ */
+function curlTufts(opt) {
+  var rng = opt.rng || mulberry32(hashStr('curl|' + (opt.seed || 0)))
+  var out = []
+  var n = opt.count || 60
+  var cx = opt.cx
+  var cy = opt.cy
+  var rx = opt.rx
+  var ry = opt.ry
+  var lenMin = opt.lenMin || 8
+  var lenMax = opt.lenMax || 16
+  var hole = opt.hole
+  for (var i = 0; i < n; i++) {
+    var a = rng() * Math.PI * 2
+    var rr = Math.sqrt(rng())
+    var x = cx + Math.cos(a) * rx * rr
+    var y = cy + Math.sin(a) * ry * rr
+    // 挖掉脸部区域：卷簇只能撒在头发上，撒到脸上就变成一片乱涂
+    if (hole) {
+      var hx = (x - hole.cx) / hole.rx
+      var hy = (y - hole.cy) / hole.ry
+      if (hx * hx + hy * hy < 1) continue
+    }
+    var len = lenMin + rng() * (lenMax - lenMin)
+    var ang = rng() * Math.PI * 2
+    var dx = Math.cos(ang) * len
+    var dy = Math.sin(ang) * len
+    // S 形：两个控制点向相反方向偏，形成一个小回勾
+    var px = -dy * (0.5 + rng() * 0.35)
+    var py = dx * (0.5 + rng() * 0.35)
+    var p = [
+      x, y,
+      x + dx * 0.33 + px, y + dy * 0.33 + py,
+      x + dx * 0.66 - px, y + dy * 0.66 - py,
+      x + dx, y + dy
+    ]
+    out.push({
+      p: p,
+      w: [2.6 + rng() * 2.6, 0.5],
+      n: opt.fine || 3,
+      tone: (opt.tone || 0) + (rng() - 0.5) * 0.6,
+      conv: 0.2,
+      tuft: 1
+    })
+  }
+  return out
+}
+
+/* ============================================================
+ * 六、SVG 序列化（缩略图用）
+ * ============================================================ */
+
+/**
+ * 数值格式化。缩略图在 140px 宽下渲染，1 个归一化单位只占 0.7px，
+ * 保留整数位已经绰绰有余，却能省下近一半字节。
+ */
+function num(v, prec) {
+  var p = prec == null ? 1 : prec
+  if (p === 0) return Math.round(v)
+  var m = p === 1 ? 10 : 100
+  return Math.round(v * m) / m
+}
+
+function opsToD(ops, prec) {
+  var d = ''
+  for (var i = 0; i < ops.length; i++) {
+    var op = ops[i]
+    var t = op[0]
+    if (t === 'M') d += 'M' + num(op[1], prec) + ' ' + num(op[2], prec)
+    else if (t === 'L') d += 'L' + num(op[1], prec) + ' ' + num(op[2], prec)
+    else if (t === 'C') {
+      d += 'C' + num(op[1], prec) + ' ' + num(op[2], prec) +
+        ' ' + num(op[3], prec) + ' ' + num(op[4], prec) +
+        ' ' + num(op[5], prec) + ' ' + num(op[6], prec)
+    } else if (t === 'Z') d += 'Z'
+  }
+  return d
+}
+
+/** 多边形 → SVG path d，点足够密所以用折线即可，省字节 */
+function polyToD(poly, prec) {
+  var d = 'M' + num(poly[0][0], prec) + ' ' + num(poly[0][1], prec)
+  for (var i = 1; i < poly.length; i++) {
+    d += 'L' + num(poly[i][0], prec) + ' ' + num(poly[i][1], prec)
+  }
+  return d + 'Z'
+}
+
+/**
+ * 发束分隔线：沿每条发束的一侧画一条很细的暗线。
+ *
+ * 真实头发是一束一束的，束与束之间有暗缝。发丝彼此重叠时这层暗缝会被
+ * 盖掉，整块就糊成一片。补一层极细的暗线是最省事的解法 ——
+ * 它必须细（1~1.6 单位）且够暗（接近 shadow 色），否则会变成描边。
+ */
+function lockSeparators(locks, rng, opt) {
+  var out = []
+  var samples = (opt && opt.samples) || 9
+  var w = (opt && opt.width) || 1.4
+  for (var i = 0; i < locks.length; i++) {
+    var lock = locks[i]
+    if (rng && rng() < 0.18) continue // 少量跳过，避免过于规律
+    var c = sampleCurve(lock.p, samples, lock.wave)
+    var sgn = rng && rng() > 0.5 ? 1 : -1
+    var off = sgn * lock.w[0] * 0.5
+    var pts = []
+    for (var k = 0; k < c.length; k++) {
+      var conv = 1 - 0.52 * c[k].t
+      pts.push({
+        x: c[k].x + c[k].nx * off * conv,
+        y: c[k].y + c[k].ny * off * conv,
+        nx: c[k].nx,
+        ny: c[k].ny,
+        t: c[k].t
+      })
+    }
+    out.push({ pts: pts, w: [w, 0.15], tone: -0.9 })
+  }
+  return out
+}
+
+module.exports = {
+  hashStr: hashStr,
+  mulberry32: mulberry32,
+  hex2rgb: hex2rgb,
+  rgb2hex: rgb2hex,
+  mixHex: mixHex,
+  shade: shade,
+  rgba: rgba,
+  buildRamp: buildRamp,
+  toneColor: toneColor,
+  ptOn: ptOn,
+  bez: bez,
+  bezD: bezD,
+  sampleCurve: sampleCurve,
+  sampleOps: sampleOps,
+  mirrorLock: mirrorLock,
+  crownLocks: crownLocks,
+  panelLocks: panelLocks,
+  sideLocks: sideLocks,
+  expand: expand,
+  polygon: polygon,
+  edgeStrands: edgeStrands,
+  lockSeparators: lockSeparators,
+  curlTufts: curlTufts,
+  flyaways: flyaways,
+  opsToD: opsToD,
+  polyToD: polyToD
+}
+
+window.__E = module.exports;
+</script><script>/**
+ * 发型 / 发色 数据与渲染
+ *
+ * 渲染分两个后端，共用同一份几何：
+ *   1) Canvas 2D —— 实时预览（离屏烘焙 + 缓存，每帧只 drawImage）
+ *   2) SVG data-URI —— 缩略图（低精度，控制体积）
+ *
+ * 几何在 200 x 240 的归一化空间内描述：
+ *   头部中心 (100,118)，横向半径 60，纵向半径 76
+ *   头顶 y≈42，下巴 y≈194，脸宽 120，脸高 152
+ *
+ * 每款发型由「发束（lock）」描述，发束再沿法线展开成细发丝（strand）。
+ * 发束数量 10~20，展开后细发丝 120~180 条 —— 这个量级才能撑住质感，
+ * 手写这么多贝塞尔不现实，所以用生成器。
+ */
+
+const E = window.__E
+
+const VIEW_W = 200
+const VIEW_H = 240
+const D = Math.PI / 180
+
+/* ---------------- 路径指令 ---------------- */
+
+function M(x, y) {
+  return ['M', x, y]
+}
+function L(x, y) {
+  return ['L', x, y]
+}
+function C(a, b, c, d, e, f) {
+  return ['C', a, b, c, d, e, f]
+}
+function Z() {
+  return ['Z']
+}
+
+/** 椭圆弧转贝塞尔 */
+function arcOps(cx, cy, rx, ry, a1, a2, startWithMove) {
+  const ops = []
+  const steps = Math.max(1, Math.ceil(Math.abs(a2 - a1) / (Math.PI / 2)))
+  const da = (a2 - a1) / steps
+  for (let i = 0; i < steps; i++) {
+    const t1 = a1 + da * i
+    const t2 = t1 + da
+    const k = (4 / 3) * Math.tan(da / 4)
+    const p1x = cx + rx * Math.cos(t1)
+    const p1y = cy + ry * Math.sin(t1)
+    const p2x = cx + rx * Math.cos(t2)
+    const p2y = cy + ry * Math.sin(t2)
+    const c1x = p1x - k * rx * Math.sin(t1)
+    const c1y = p1y + k * ry * Math.cos(t1)
+    const c2x = p2x + k * rx * Math.sin(t2)
+    const c2y = p2y - k * ry * Math.cos(t2)
+    if (i === 0 && startWithMove) ops.push(M(p1x, p1y))
+    ops.push(C(c1x, c1y, c2x, c2y, p2x, p2y))
+  }
+  return ops
+}
+
+/** 波浪轮廓：把一段弧拆成 n 个向外鼓起的凸包 */
+function scallopOps(cx, cy, rx, ry, a1, a2, n, amp, startWithMove) {
+  const ops = []
+  const da = (a2 - a1) / n
+  for (let i = 0; i < n; i++) {
+    const t0 = a1 + da * i
+    const t1 = t0 + da
+    const tm = (t0 + t1) / 2
+    const p1x = cx + rx * Math.cos(t0)
+    const p1y = cy + ry * Math.sin(t0)
+    const p2x = cx + rx * Math.cos(t1)
+    const p2y = cy + ry * Math.sin(t1)
+    const pmx = cx + rx * (1 + amp) * Math.cos(tm)
+    const pmy = cy + ry * (1 + amp) * Math.sin(tm)
+    if (i === 0 && startWithMove) ops.push(M(p1x, p1y))
+    ops.push(C(
+      p1x + 0.55 * (pmx - p1x), p1y + 0.55 * (pmy - p1y),
+      p2x + 0.55 * (pmx - p2x), p2y + 0.55 * (pmy - p2y),
+      p2x, p2y
+    ))
+  }
+  return ops
+}
+
+/** 发束生成用的弧定义 */
+function arc(cx, cy, rx, ry, a0, a1) {
+  return { cx: cx, cy: cy, rx: rx, ry: ry, a0: a0, a1: a1 }
+}
+
+/** 发际线：一条平缓的拱形，两侧低、中间高 */
+function hairline(rx, ry, cy) {
+  return arc(100, cy == null ? 100 : cy, rx == null ? 46 : rx, ry == null ? 14 : ry, Math.PI, Math.PI * 2)
+}
+
+/** 侧边面板：右半用原曲线，左半镜像，一次生成两侧 */
+function panels(cfg) {
+  const right = E.panelLocks(cfg)
+  const left = E.panelLocks({
+    inner: E.mirrorLock(cfg.inner),
+    outer: E.mirrorLock(cfg.outer),
+    count: cfg.count,
+    width: cfg.width,
+    fine: cfg.fine,
+    tone: cfg.tone,
+    wave: cfg.wave,
+    curvePow: cfg.curvePow
+  })
+  return right.concat(left)
+}
+
+/* ---------------- 发型定义 ---------------- */
+
+const HAIR_STYLES = [
+  /* ========== 1. 寸头 ========== */
+  {
+    id: 'buzz',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.1,
+    name: '寸头',
+    en: 'Buzz Cut',
+    tag: '清爽利落',
+    face: '适合方脸 / 圆脸',
+    desc: '极短寸头，轮廓干净，五官立体度立刻提升，夏天最省事。',
+    sheen: { x: 74, y: 54, r: 46, a: 0.20 },
+    outline() {
+      return [[
+        M(42, 126),
+        C(42, 72, 64, 44, 100, 44),
+        C(136, 44, 158, 72, 158, 126),
+        C(158, 110, 151, 98, 142, 93),
+        C(126, 87, 74, 87, 58, 93),
+        C(49, 98, 42, 110, 42, 126),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        E.crownLocks({
+          start: arc(100, 47, 6, 4, Math.PI, Math.PI * 2),
+          end: arc(100, 93, 42, 6, Math.PI, Math.PI * 2),
+          count: 16, width: [7, 1.8], fine: 4, tone: -0.10, bulge: 0.10
+        }),
+        panels({
+          inner: [100, 88, 124, 88, 146, 100, 158, 126],
+          outer: [100, 44, 132, 48, 156, 84, 158, 126],
+          count: 5, width: [9, 2], fine: 4, tone: -0.14
+        })
+      )
+    }
+  },
+
+  /* ========== 2. 短碎发 ========== */
+  {
+    id: 'crop',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.14,
+    name: '短碎发',
+    en: 'Textured Crop',
+    tag: '百搭减龄',
+    face: '几乎适配所有脸型',
+    desc: '带层次感的短碎发，顶部略蓬松，修饰额头又能拉长脸型。',
+    sheen: { x: 72, y: 52, r: 48, a: 0.22 },
+    outline() {
+      return [[
+        M(38, 134),
+        C(34, 80, 54, 42, 100, 40),
+        C(146, 42, 166, 80, 162, 134),
+        L(146, 134),
+        C(150, 116, 151, 102, 146, 93),
+        C(128, 84, 72, 84, 54, 93),
+        C(49, 102, 50, 116, 54, 134),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        E.crownLocks({
+          start: arc(100, 46, 9, 5, Math.PI, Math.PI * 2),
+          end: arc(100, 93, 46, 9, Math.PI, Math.PI * 2),
+          count: 19, width: [8.5, 2.2], fine: 5, tone: 0.0, bulge: 0.18,
+          wave: { amp: 1.1, freq: 1.6, phase: 0.4 }
+        }),
+        panels({
+          inner: [100, 86, 128, 86, 149, 100, 160, 134],
+          outer: [100, 40, 138, 46, 165, 90, 162, 134],
+          count: 6, width: [10, 2.2], fine: 5, tone: -0.10,
+          wave: { amp: 0.9, freq: 1.4 }
+        })
+      )
+    }
+  },
+
+  /* ========== 3. 波波头 ========== */
+  {
+    id: 'bob',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.28,
+    name: '波波头',
+    en: 'Blunt Bob',
+    tag: '气质干练',
+    face: '适合长脸 / 鹅蛋脸',
+    desc: '齐下巴的内扣波波头，配平齐刘海，脸小一圈，通勤约会都稳。',
+    sheen: { x: 70, y: 56, r: 54, a: 0.22 },
+    outline() {
+      return [[
+        M(32, 178),
+        C(20, 122, 24, 50, 100, 42),
+        C(176, 50, 180, 122, 168, 178),
+        L(138, 178),
+        C(144, 152, 148, 126, 147, 110),
+        C(146, 104, 145, 101, 144, 99),
+        L(56, 99),
+        C(55, 101, 54, 104, 53, 110),
+        C(52, 126, 56, 152, 62, 178),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        // 平齐刘海：发际线是一条直线，所以 ry 取 0
+        E.crownLocks({
+          start: arc(100, 50, 7, 4, Math.PI, Math.PI * 2),
+          end: arc(100, 99, 45, 0, Math.PI, Math.PI * 2),
+          count: 17, width: [9, 2.2], fine: 5, tone: 0.04, bulge: 0.10
+        }),
+        // 侧边面板：内沿贴脸、外沿走轮廓，发束在两者之间铺满
+        panels({
+          inner: [144, 99, 148, 122, 146, 154, 138, 178],
+          outer: [104, 42, 152, 52, 180, 122, 168, 178],
+          count: 6, width: [10, 2.4], fine: 6, tone: -0.06, conv: 0.34
+        })
+      )
+    }
+  },
+
+  /* ========== 4. 齐刘海短发 ========== */
+  {
+    id: 'fringe',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.24,
+    name: '齐刘海短发',
+    en: 'Short with Fringe',
+    tag: '甜酷日系',
+    face: '适合高额头 / 长脸',
+    desc: '厚重齐刘海盖住额头，两侧收在耳下，显嫩又显脸小。',
+    sheen: { x: 70, y: 54, r: 50, a: 0.21 },
+    outline() {
+      return [[
+        M(36, 144),
+        C(24, 118, 28, 50, 100, 42),
+        C(172, 50, 176, 118, 164, 144),
+        L(140, 144),
+        C(146, 128, 148, 114, 147, 104),
+        C(146, 100, 145, 98, 144, 97),
+        L(56, 97),
+        C(55, 98, 54, 100, 53, 104),
+        C(52, 114, 54, 128, 60, 144),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        E.crownLocks({
+          start: arc(100, 48, 7, 4, Math.PI, Math.PI * 2),
+          end: arc(100, 97, 45, 0, Math.PI, Math.PI * 2),
+          count: 18, width: [9, 2.2], fine: 5, tone: 0.03, bulge: 0.10
+        }),
+        panels({
+          inner: [144, 97, 148, 118, 147, 134, 140, 144],
+          outer: [104, 42, 150, 50, 176, 112, 164, 144],
+          count: 6, width: [10, 2.4], fine: 6, tone: -0.06, conv: 0.34
+        })
+      )
+    }
+  },
+
+  /* ========== 5. 长直发 ========== */
+  {
+    id: 'long-straight',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.48,
+    name: '长直发',
+    en: 'Long Straight',
+    tag: '经典温柔',
+    face: '适合圆脸 / 方脸',
+    desc: '顺直长发垂到胸前，两侧发丝收窄脸部轮廓，温柔感拉满。',
+    sheen: { x: 68, y: 56, r: 58, a: 0.22 },
+    outline() {
+      return [[
+        M(26, 236),
+        C(12, 168, 18, 52, 100, 42),
+        C(182, 52, 188, 168, 174, 236),
+        L(132, 236),
+        C(140, 200, 146, 168, 147, 134),
+        C(147, 116, 146, 102, 144, 91),
+        C(126, 84, 74, 84, 56, 91),
+        C(54, 102, 53, 116, 53, 134),
+        C(54, 168, 60, 200, 68, 236),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        E.crownLocks({
+          start: arc(100, 48, 8, 5, Math.PI, Math.PI * 2),
+          end: arc(100, 91, 44, 7, Math.PI, Math.PI * 2),
+          count: 16, width: [9, 2.3], fine: 5, tone: 0.02, bulge: 0.14
+        }),
+        panels({
+          inner: [144, 91, 147, 118, 146, 162, 132, 236],
+          outer: [104, 42, 154, 54, 188, 142, 174, 236],
+          count: 8, width: [11, 2.4], fine: 7, tone: -0.06, conv: 0.22,
+          wave: { amp: 1.6, freq: 1.1 }
+        }),
+        // 背后一层更暗的体量：从轮廓外缘隐约透出，制造纵深
+        panels({
+          inner: [150, 100, 152, 126, 151, 170, 142, 236],
+          outer: [110, 44, 156, 56, 182, 146, 176, 236],
+          count: 4, width: [15, 2.8], fine: 5, tone: -0.34, conv: 0.2,
+          wave: { amp: 2.4, freq: 0.85 }
+        }),
+        // 后层中长发束：从后颈往下铺满中央。
+        // 长发垂下来时中间本来就有头发盖住颈部，只有两侧垂帘会在
+        // 下巴到胸口之间留一条竖缝，用户一眼就看出来。
+        // 但内边界必须收到下巴以下：第一版 x 82..118「遮嘴 75%」，
+        // 第二版 x 90..110 仍「遮嘴 26%」。真实长发垂在胸口，不糊嘴。
+        panels({
+          inner: [94, 172, 92, 196, 94, 218, 98, 238],
+          outer: [106, 172, 108, 196, 106, 218, 102, 238],
+          count: 7, width: [9, 2.0], fine: 6, tone: -0.14, conv: 0.24,
+          wave: { amp: 2.2, freq: 1.1 }
+        })
+      )
+    }
+  },
+
+  /* ========== 6. 大波浪 ========== */
+  {
+    id: 'wavy',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.7,
+    name: '大波浪',
+    en: 'Big Waves',
+    tag: '氛围感',
+    face: '适合长脸 / 鹅蛋脸',
+    desc: '大卷波浪从耳侧开始铺开，蓬松有量感，上镜立刻高级。',
+    sheen: { x: 68, y: 56, r: 60, a: 0.24 },
+    outline() {
+      const cx = 100, cy = 120, rx = 84, ry = 92
+      const a1 = Math.PI * 1.02
+      const a2 = Math.PI * 1.99
+      const s = E.ptOn(cx, cy, rx, ry, a1)
+      return [[
+        M(20, 236),
+        C(10, 176, 12, 132, s[0], s[1]),
+        ...scallopOps(cx, cy, rx, ry, a1, a2, 5, 0.075, false),
+        C(180, 172, 182, 208, 176, 236),
+        L(134, 236),
+        C(142, 200, 148, 168, 149, 134),
+        C(149, 116, 147, 102, 144, 91),
+        C(126, 84, 74, 84, 56, 91),
+        C(53, 102, 51, 116, 51, 134),
+        C(52, 168, 58, 200, 66, 236),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        E.crownLocks({
+          start: arc(100, 34, 14, 8, Math.PI, Math.PI * 2),
+          end: arc(100, 91, 44, 7, Math.PI, Math.PI * 2),
+          count: 16, width: [9, 2.3], fine: 5, tone: 0.02, bulge: 0.14,
+          wave: { amp: 1.2, freq: 1.5 }
+        }),
+        // 左右两条外引导曲线必须严格镜像。之前右边给到 x=200、
+        // 左边只到 x≈176，实测整头中心偏右 6% 脸宽 ——
+        // 用户看到的就是「发型戴歪了」，而且歪得很明显。
+        panels({
+          inner: [144, 91, 147, 118, 146, 162, 132, 236],
+          // 外引导曲线贴住 scallop 轮廓（内侧留 6~10 单位）。
+          outer: [104, 38, 166, 48, 200, 130, 176, 236],
+          count: 6, width: [15, 3], fine: 8, tone: -0.04, conv: 0.18,
+          wave: { amp: 9, freq: 1.5 }
+        }),
+        panels({
+          inner: [56, 91, 53, 118, 54, 162, 68, 236],
+          outer: [96, 38, 34, 48, 0, 130, 24, 236],
+          count: 6, width: [15, 3], fine: 8, tone: -0.04, conv: 0.18,
+          wave: { amp: 9, freq: 1.5, phase: Math.PI }
+        }),
+        panels({
+          inner: [150, 100, 152, 126, 151, 170, 142, 236],
+          outer: [110, 42, 162, 54, 190, 146, 178, 236],
+          count: 4, width: [17, 3.2], fine: 6, tone: -0.32, conv: 0.18,
+          wave: { amp: 10, freq: 1.3, phase: 1.6 }
+        }),
+        panels({
+          inner: [50, 100, 48, 126, 49, 170, 58, 236],
+          outer: [90, 42, 38, 54, 10, 146, 22, 236],
+          count: 4, width: [17, 3.2], fine: 6, tone: -0.32, conv: 0.18,
+          wave: { amp: 10, freq: 1.3, phase: 1.6 + Math.PI }
+        }),
+        // 后层中长发束：见 long-straight 的同名注释。
+        // 大波浪之前下巴处中央完全空缺，检测报「下巴 0%」。
+        panels({
+          inner: [94, 172, 92, 196, 94, 218, 98, 238],
+          outer: [106, 172, 108, 196, 106, 218, 102, 238],
+          count: 7, width: [9, 2.0], fine: 6, tone: -0.14, conv: 0.24,
+          wave: { amp: 2.2, freq: 1.1 }
+        })
+      )
+    }
+  },
+
+  /* ========== 7. 背头 ========== */
+  {
+    id: 'pompadour',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.18,
+    name: '背头',
+    en: 'Pompadour',
+    tag: '复古精英',
+    face: '适合方脸 / 圆脸',
+    desc: '两侧收紧、顶部向后梳起，露出额头和眉眼，气场直接拉高。',
+    sheen: { x: 78, y: 34, r: 40, a: 0.30 },
+    outline() {
+      return [[
+        M(40, 124),
+        C(34, 110, 36, 96, 46, 88),
+        C(42, 52, 62, 24, 112, 22),
+        C(156, 24, 176, 62, 168, 96),
+        C(166, 110, 162, 118, 160, 124),
+        L(148, 124),
+        // 发际线必须抬到 y≈72：背头的特征就是露出整个额头，
+        // 之前压在 y≈86 只留一条窄额头，看起来更像蘑菇头。
+        C(150, 106, 150, 86, 144, 76),
+        C(122, 68, 78, 68, 56, 76),
+        C(50, 86, 50, 106, 52, 124),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        // 底层：从发际线铺到顶部，把整个体量填满
+        E.crownLocks({
+          start: arc(100, 78, 46, 7, Math.PI, Math.PI * 2),
+          end: arc(102, 28, 26, 10, Math.PI, Math.PI * 2),
+          count: 17, width: [8, 2.0], fine: 5, tone: 0.04, bulge: 0.22
+        }),
+        // 表层：几束又长又亮的发丝从额前一路梳到头顶。
+        // 这是"背头"最直接的视觉特征 —— 能看出梳拢的方向，
+        // 只靠体量撑是撑不出来的。
+        { p: [62, 80, 58, 62, 72, 38, 96, 26], w: [7, 1.8], n: 5, tone: 0.22, conv: 0.3 },
+        { p: [78, 80, 76, 62, 86, 38, 102, 24], w: [7, 1.8], n: 5, tone: 0.26, conv: 0.3 },
+        { p: [94, 80, 94, 62, 98, 38, 106, 23], w: [7, 1.8], n: 5, tone: 0.28, conv: 0.3 },
+        { p: [110, 80, 110, 62, 110, 38, 110, 23], w: [7, 1.8], n: 5, tone: 0.24, conv: 0.3 },
+        { p: [126, 80, 124, 62, 120, 38, 114, 24], w: [7, 1.8], n: 5, tone: 0.18, conv: 0.3 },
+        // 两侧收紧贴头皮
+        panels({
+          inner: [146, 80, 149, 100, 150, 114, 148, 124],
+          outer: [112, 22, 150, 28, 172, 70, 160, 124],
+          count: 5, width: [9, 2], fine: 5, tone: -0.14, conv: 0.42
+        })
+      )
+    }
+  },
+
+  /* ========== 8. 羊毛卷 ========== */
+  {
+    id: 'curly',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.52,
+    name: '羊毛卷',
+    en: 'Curly Volume',
+    tag: '时髦个性',
+    face: '适合小脸 / 尖下巴',
+    desc: '细密小卷堆出饱满量感，头顶蓬松显发量，个性又有亲和力。',
+    sheen: { x: 70, y: 50, r: 56, a: 0.20 },
+    outline() {
+      const cx = 100, cy = 110, rx = 76, ry = 84
+      const a1 = Math.PI * 1.02
+      const a2 = Math.PI * 1.99
+      const s = E.ptOn(cx, cy, rx, ry, a1)
+      return [[
+        M(32, 176),
+        C(24, 148, 22, 126, s[0], s[1]),
+        ...scallopOps(cx, cy, rx, ry, a1, a2, 7, 0.12, false),
+        C(176, 132, 174, 156, 168, 176),
+        L(150, 176),
+        C(152, 152, 151, 128, 147, 110),
+        C(126, 88, 74, 88, 53, 110),
+        C(49, 128, 48, 152, 50, 176),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        E.crownLocks({
+          start: arc(100, 28, 17, 11, Math.PI, Math.PI * 2),
+          // 卷发的中下部交给卷簇，冠部发束只铺头顶。
+          // 之前让它一路拉到发际线，等于在卷团里插了 22 根又长又直的棍子，
+          // 卷发的体积感全被这些直棍破坏了。
+          end: arc(100, 76, 40, 14, Math.PI, Math.PI * 2),
+          count: 18, width: [9, 2.4], fine: 5, tone: 0.02, bulge: 0.22,
+          wave: { amp: 3.2, freq: 3.4 }
+        }),
+        // 小卷簇：在发型范围内撒满短 S 形发束，堆出羊毛卷的颗粒感。
+        // 只靠给长发束加正弦只能做出"波浪"，做不出"卷"。
+        E.curlTufts({
+          count: 190, cx: 100, cy: 100, rx: 66, ry: 76,
+          lenMin: 9, lenMax: 19, tone: 0.0, fine: 3,
+          // 挖掉的洞要下移：原来 cy=120/ry=62 的洞一直顶到 y=58，
+          // 把额头那圈也挖空了，于是发际线只剩发块底色。
+          hole: { cx: 100, cy: 138, rx: 46, ry: 50 }
+        }),
+        panels({
+          inner: [147, 110, 150, 130, 149, 156, 150, 176],
+          outer: [104, 30, 160, 40, 187, 118, 170, 176],
+          count: 6, width: [15, 3], fine: 7, tone: -0.04, conv: 0.3,
+          wave: { amp: 5, freq: 3.2 }
+        }),
+        // 后层中长发束：见 long-straight 的同名注释。
+        // 卷发之前下巴处中央完全空缺，检测报「下巴 0%」。
+        panels({
+          inner: [94, 172, 92, 196, 94, 218, 98, 238],
+          outer: [106, 172, 108, 196, 106, 218, 102, 238],
+          count: 7, width: [9, 2.0], fine: 6, tone: -0.14, conv: 0.24,
+          wave: { amp: 2.2, freq: 1.1 }
+        })
+      )
+    }
+  },
+
+  /* ========== 9. 高马尾 ========== */
+  {
+    id: 'ponytail',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.34,
+    name: '高马尾',
+    en: 'High Ponytail',
+    tag: '元气少女',
+    face: '适合圆脸 / 鹅蛋脸',
+    desc: '全部梳起扎高，脸型线条完全露出，精神又显高颅顶。',
+    sheen: { x: 74, y: 52, r: 46, a: 0.22 },
+    outline() {
+      return [
+        [
+          M(44, 122),
+          C(44, 70, 66, 44, 100, 44),
+          C(134, 44, 156, 70, 156, 122),
+          C(156, 110, 150, 99, 142, 94),
+          C(126, 88, 74, 88, 58, 94),
+          C(50, 99, 44, 110, 44, 122),
+          Z()
+        ],
+        [
+          M(138, 48),
+          C(156, 26, 184, 30, 190, 54),
+          C(196, 82, 184, 114, 174, 136),
+          C(168, 148, 156, 142, 155, 126),
+          C(152, 100, 145, 70, 138, 48),
+          Z()
+        ]
+      ]
+    },
+    locks() {
+      return [].concat(
+        // 头顶梳得极紧，发丝向后收拢
+        E.crownLocks({
+          start: arc(100, 94, 42, 6, Math.PI, Math.PI * 2),
+          end: arc(100, 50, 8, 5, Math.PI, Math.PI * 2),
+          count: 19, width: [7, 1.8], fine: 5, tone: -0.04, bulge: 0.08
+        }),
+        panels({
+          inner: [142, 94, 146, 104, 150, 114, 156, 122],
+          outer: [100, 44, 132, 48, 155, 86, 156, 122],
+          count: 5, width: [8, 1.8], fine: 4, tone: -0.16
+        }),
+        // 马尾本体。
+        // 踩过的坑：crownLocks 的 start 弧是「发束根部」，
+        // 把 start 放在脸内部等于让马尾从脸上长出来，实测「遮眼 82%、遮嘴 73%」；
+        // 改用手写贝塞尔后，根部放在 y=150 仍会盖住嘴 —— 脸廓一直延伸到 y=182。
+        // 真实马尾根部在后颈（脸廓以下），所以整体下移到 y=196 起。
+        { p: [96, 194, 96, 218, 100, 232, 104, 242], w: [16, 3.2], n: 6, tone: 0.06, conv: 0.3 },
+        { p: [104, 194, 104, 218, 100, 232, 96, 242], w: [16, 3.2], n: 6, tone: 0.0, conv: 0.3 },
+        { p: [88, 196, 84, 220, 88, 234, 94, 244], w: [13, 2.6], n: 5, tone: -0.08, conv: 0.3 },
+        { p: [112, 196, 116, 220, 112, 234, 106, 244], w: [13, 2.6], n: 5, tone: -0.08, conv: 0.3 },
+        { p: [80, 200, 72, 224, 76, 236, 86, 246], w: [10, 2.0], n: 4, tone: -0.16, conv: 0.32 },
+        { p: [120, 200, 128, 224, 124, 236, 114, 246], w: [10, 2.0], n: 4, tone: -0.16, conv: 0.32 }
+      )
+    }
+  },
+
+  /* ========== 10. 中分长发 ========== */
+  {
+    id: 'middle-part',
+    // 发型宽 / 脸宽 的设计目标。getGeom 会把水平方向归一化到这个值，
+    // 保证同一张脸换发型时大小关系始终合理（圆寸贴头、大波浪外扩）。
+    fit: 1.46,
+    name: '中分长发',
+    en: 'Middle Part',
+    tag: '韩系清冷',
+    face: '适合所有脸型',
+    desc: '中分带出两片额前碎发，修饰颧骨，清冷又有女人味。',
+    sheen: { x: 66, y: 56, r: 58, a: 0.22 },
+    outline() {
+      return [[
+        M(26, 236),
+        C(12, 168, 18, 52, 100, 42),
+        C(182, 52, 188, 168, 174, 236),
+        L(132, 236),
+        C(140, 200, 146, 168, 147, 134),
+        C(147, 114, 146, 100, 144, 91),
+        C(126, 84, 74, 84, 56, 91),
+        C(54, 100, 53, 114, 53, 134),
+        C(54, 168, 60, 200, 68, 236),
+        Z()
+      ]]
+    },
+    locks() {
+      return [].concat(
+        // 右半：从中缝扇形铺到右半发际线
+        E.crownLocks({
+          start: arc(100, 50, 4, 3, Math.PI, Math.PI * 2),
+          end: arc(100, 91, 44, 7, Math.PI * 1.5, Math.PI * 2),
+          count: 11, width: [8, 2.1], fine: 5, tone: 0.02, bulge: 0.16
+        }),
+        // 左半
+        E.crownLocks({
+          start: arc(100, 50, 4, 3, Math.PI, Math.PI * 2),
+          end: arc(100, 91, 44, 7, Math.PI, Math.PI * 1.5),
+          count: 11, width: [8, 2.1], fine: 5, tone: 0.02, bulge: 0.16
+        }),
+        // 分缝线：一条细窄的深色发束从头顶垂到发际线，
+        // 这是"中分"唯一可靠的视觉标志，没有它就只是普通长直发
+        { p: [100, 46, 100, 62, 100, 76, 100, 88], w: [3, 1.2], n: 3, tone: -0.62 },
+        panels({
+          inner: [144, 90, 147, 118, 146, 162, 132, 236],
+          outer: [104, 42, 154, 54, 188, 142, 174, 236],
+          count: 8, width: [11, 2.4], fine: 7, tone: -0.06, conv: 0.22,
+          wave: { amp: 1.4, freq: 1.1 }
+        }),
+        // 后层中长发束：见 long-straight 的同名注释。
+        // 中分长发之前下巴处中央完全空缺，检测报「下巴 0%」。
+        panels({
+          inner: [94, 172, 92, 196, 94, 218, 98, 238],
+          outer: [106, 172, 108, 196, 106, 218, 102, 238],
+          count: 7, width: [9, 2.0], fine: 6, tone: -0.14, conv: 0.24,
+          wave: { amp: 2.2, freq: 1.1 }
+        })
+      )
+    }
+  }
+]
+
+/* ---------------- 发色 ---------------- */
+
+/**
+ * 只存基色 + 高光色，其余 4 阶由 buildRamp 推导。
+ * 这样 12 个色 × 6 阶 = 72 个色值不用手写，且阶间关系恒定。
+ */
+// sheenTint 是 tone=1（最强高光）时发丝的颜色，也是光泽层的颜色。
+// 深色头发必须给暗的高光色：真实黑发的镜面反射只到中暗灰蓝，
+// 给到 #8b90a6 这种中灰，成片的发丝打满高光后整头就变成灰色了 ——
+// 这是之前「一片灰白」的根因，不是光照模型算错。
+const HAIR_COLORS = [
+  { id: 'black', name: '自然黑', base: '#1b1a21', sheenTint: '#565c72' },
+  { id: 'darkbrown', name: '深棕', base: '#33231a', sheenTint: '#6d5341' },
+  { id: 'chestnut', name: '栗棕', base: '#57381f', sheenTint: '#a87b4d' },
+  { id: 'flaxen', name: '亚麻棕', base: '#7d6044', sheenTint: '#c9a97e' },
+  { id: 'honey', name: '蜂蜜金', base: '#b3833c', sheenTint: '#f0cd82' },
+  { id: 'rosegold', name: '玫瑰金', base: '#b06f6b', sheenTint: '#f0b3a9' },
+  { id: 'redbrown', name: '红棕', base: '#6f2d1c', sheenTint: '#c06f49' },
+  { id: 'wine', name: '酒红', base: '#5c1626', sheenTint: '#9e4258' },
+  { id: 'blueblack', name: '蓝黑', base: '#14182b', sheenTint: '#4a5680' },
+  { id: 'ashpurple', name: '灰紫', base: '#4a3b52', sheenTint: '#8b7d9b' },
+  { id: 'silver', name: '银灰', base: '#9a9aa6', sheenTint: '#e2e2ec' },
+  { id: 'sakura', name: '樱花粉', base: '#b07184', sheenTint: '#f0aec0' }
+]
+
+// 补齐 ramp / swatch，保持对页面层的字段兼容
+for (let i = 0; i < HAIR_COLORS.length; i++) {
+  const c = HAIR_COLORS[i]
+  c.ramp = E.buildRamp(c.base, c.sheenTint)
+  c.swatch = c.base
+  c.top = c.ramp.mid
+  c.bottom = c.ramp.shadow
+}
+
+/* ---------------- 查询 ---------------- */
+
+function getStyle(id) {
+  for (let i = 0; i < HAIR_STYLES.length; i++) {
+    if (HAIR_STYLES[i].id === id) return HAIR_STYLES[i]
+  }
+  return HAIR_STYLES[0]
+}
+
+function getColor(id) {
+  for (let i = 0; i < HAIR_COLORS.length; i++) {
+    if (HAIR_COLORS[i].id === id) return HAIR_COLORS[i]
+  }
+  return HAIR_COLORS[0]
+}
+
+/* ---------------- 几何缓存 ---------------- */
+
+const geomCache = {}
+
+/**
+ * 生成某款发型的完整几何。结果缓存，因为发丝分布只跟 styleId 有关
+ * （换发色不重新算几何，只换颜色）。
+ *
+ * 三档精度：
+ *   high 实时预览 / 离屏烘焙（600 条发丝）
+ *   mid  烘焙不可用时的降级路径，保证还能跑到可用的帧率
+ *   low  缩略图（140px 宽，细发丝本来就看不清）
+ */
+function getGeom(style, detail) {
+  const key = style.id + '@' + detail
+  if (geomCache[key]) return geomCache[key]
+
+  const low = detail === 'low'
+  const mid = detail === 'mid'
+  const rng = E.mulberry32(E.hashStr(style.id))
+  let locks = style.locks()
+  // 缩略图只需要看个大概形状，卷发簇这类高频细节按 1/4 抽样即可，
+  // 否则单张缩略图会涨到 16KB，10 张就 160KB 塞进 WXML 数据里。
+  // 缩略图只需要看个大概形状，高频细节按比例抽样即可，
+  // 否则单张缩略图会涨到 14KB，10 张就 140KB 塞进 WXML 数据里。
+  // 抽样的判据不能只看 tuft 标记：后来给长发补的「后层中长发束」
+  // 是普通 panels，没有 tuft 标记，于是一次也没被抽样，
+  // 缩略图直接从 87KB 涨到 138KB。
+  // 改为按「装饰性 + 序号」双条件抽样：带 tuft 的按 1/4，
+  // 其余按索引奇偶抽一半，保证任何新增发束都不会顶爆体积。
+  if (low) {
+    locks = locks.filter((l, i) => (l.tuft ? i % 4 === 0 : i % 2 === 0))
+  }
+  const outline = style.outline()
+
+  const body = E.expand(locks, rng, {
+    // 发丝密度是质感的关键。单条发丝太宽（2~3 单位，在手机上就是 5~8px）
+    // 看起来像笔刷涂抹；真实头发在这个尺度下应该是 0.5~1.5 单位。
+    // 所以高精度下把发束展开倍数拉到 2.6，靠数量堆出细腻度。
+    // 缩略图反过来：140px 宽下 1 单位只占 0.7px，细发丝根本看不见，
+    // 用「更少但更宽」的发丝即可，省下的字节很可观。
+    scale: low ? 0.28 : mid ? 1.15 : 2.6,
+    samples: low ? 5 : mid ? 9 : 12,
+    // 只在离屏烘焙档开启「沿长度分段着色」。mid 档是烘焙失败时的
+    // 每帧兜底路径，发丝数翻倍会直接拖垮帧率，所以那里保持单段。
+    split: !low && !mid,
+    sheen: style.sheen || { x: 72, y: 54, r: 52 }
+  })
+
+  // 发束分隔暗线：让一束一束的结构看得出来
+  const sep = low || mid ? [] : E.lockSeparators(locks, rng, { samples: 11, width: 1.5 })
+
+  let edge = []
+  const FACE = { cx: 100, cy: 118, rx: 50, ry: 64 }
+  for (let i = 0; i < outline.length; i++) {
+    edge = edge.concat(E.edgeStrands(outline[i], rng, {
+      perSegment: low ? 5 : 7,
+      step: low ? 6 : 2,
+      per: low ? 1 : mid ? 2 : 5,
+      lenMin: 2,
+      lenMax: low ? 5 : 11,
+      tone: 0.24,
+      face: FACE
+    }))
+  }
+
+  // 飞发要短、要细、要少：长而粗的飞发在屏幕上就是一根根针，
+  // 反而比没有飞发更假。真实飞发只在边缘冒一点点头。
+  const fly = low || mid
+    ? []
+    : E.flyaways(outline[0], rng, { count: 18, lenMin: 5, lenMax: 13, face: FACE })
+
+  let geom = {
+    outline: outline,
+    body: body,
+    sep: sep,
+    edge: edge,
+    fly: fly,
+    sheen: style.sheen || { x: 72, y: 54, r: 52, a: 0.2 }
+  }
+
+  /* ---- 水平比例归一化 ----
+   * 人脸在虚拟画布里固定是 100 宽（rx=50）。但各发型的设计稿宽度
+   * 从 121 到 185 不等，如果直接按同一个倍数映射到真人脸上，
+   * 圆寸会窄到连脸两侧都盖不住、大波浪又会宽得离谱。
+   * 这里按 style.fit（发型宽 / 脸宽 的设计目标）把水平方向
+   * 绕脸心 x=100 缩放到目标宽度，纵向不动 —— 纵向的脸心位置
+   * 和各发型的长短设计本来就是对的。
+   */
+  const fitTarget = (style.fit || 1.3) * 100
+  let bx0 = Infinity
+  let bx1 = -Infinity
+  for (let i = 0; i < body.length; i++) {
+    const pts = body[i].pts
+    for (let k = 0; k < pts.length; k++) {
+      if (pts[k].x < bx0) bx0 = pts[k].x
+      if (pts[k].x > bx1) bx1 = pts[k].x
+    }
+  }
+  const curW = bx1 - bx0
+  if (curW > 1 && Math.abs(curW - fitTarget) > 0.5) {
+    const sx = fitTarget / curW
+    const fitPt = function (p) { p.x = 100 + (p.x - 100) * sx }
+    for (let i = 0; i < body.length; i++) {
+      const pts = body[i].pts
+      for (let k = 0; k < pts.length; k++) fitPt(pts[k])
+    }
+    for (let i = 0; i < sep.length; i++) {
+      const pts = sep[i].pts
+      for (let k = 0; k < pts.length; k++) fitPt(pts[k])
+    }
+    for (let i = 0; i < edge.length; i++) {
+      const pts = edge[i].pts
+      for (let k = 0; k < pts.length; k++) fitPt(pts[k])
+    }
+    for (let i = 0; i < fly.length; i++) {
+      const pts = fly[i].pts
+      for (let k = 0; k < pts.length; k++) fitPt(pts[k])
+    }
+    geom.outline = outline.map(function (ops) {
+      return ops.map(function (op) {
+        if (op[0] === 'M' || op[0] === 'L') return [op[0], 100 + (op[1] - 100) * sx, op[2]]
+        if (op[0] === 'C') {
+          return [op[0],
+            100 + (op[1] - 100) * sx, op[2],
+            100 + (op[3] - 100) * sx, op[4],
+            100 + (op[5] - 100) * sx, op[6]]
+        }
+        return op
+      })
+    })
+    if (geom.sheen) geom.sheen = {
+      x: 100 + (geom.sheen.x - 100) * sx,
+      y: geom.sheen.y,
+      r: geom.sheen.r * sx,
+      a: geom.sheen.a
+    }
+  }
+
+  geomCache[key] = geom
+  return geom
+}
+
+/* ---------------- Canvas 渲染 ---------------- */
+
+function tracePath(ctx, ops) {
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]
+    const t = op[0]
+    if (t === 'M') ctx.moveTo(op[1], op[2])
+    else if (t === 'L') ctx.lineTo(op[1], op[2])
+    else if (t === 'C') ctx.bezierCurveTo(op[1], op[2], op[3], op[4], op[5], op[6])
+    else if (t === 'Z') ctx.closePath()
+  }
+}
+
+/**
+ * 把一批发丝按色调分桶，每桶合并成一条路径一次填充。
+ * 150 条发丝如果逐条 fill 就是 150 次绘制调用，分桶后只需 12~14 次，
+ * 这是实时性能的关键。
+ */
+/**
+ * 把发丝按 tone 分桶，并预先算好每个桶的 Path2D。
+ *
+ * 这是换发色的快路径：分桶结果和 Path2D 只跟发型有关，
+ * 跟颜色无关。换色时直接用缓存里的 Path2D 填新色，
+ * 省掉「遍历 600 条发丝 + 每条做一次多边形展开」的开销。
+ *
+ * @returns {{keys:number[], paths:Object, tones:Object}}
+ */
+function bucketize(strands, buckets) {
+  const groups = {}
+  for (let i = 0; i < strands.length; i++) {
+    const s = strands[i]
+    let lvl = Math.round(((s.tone + 1) / 2) * (buckets - 1))
+    if (lvl < 0) lvl = 0
+    if (lvl > buckets - 1) lvl = buckets - 1
+    if (!groups[lvl]) groups[lvl] = []
+    groups[lvl].push(s)
+  }
+  const keys = []
+  for (const k in groups) keys.push(Number(k))
+  keys.sort(function (a, b) { return a - b })
+
+  const paths = {}
+  const tones = {}
+  for (let ki = 0; ki < keys.length; ki++) {
+    const k = keys[ki]
+    tones[k] = (k / (buckets - 1)) * 2 - 1
+    const list = groups[k]
+    let path = null
+    try {
+      path = new Path2D()
+    } catch (e) {
+      path = null
+    }
+    if (path) {
+      for (let i = 0; i < list.length; i++) {
+        const poly = E.polygon(list[i])
+        path.moveTo(poly[0][0], poly[0][1])
+        for (let j = 1; j < poly.length; j++) path.lineTo(poly[j][0], poly[j][1])
+        path.closePath()
+      }
+      paths[k] = path
+    } else {
+      // 没有 Path2D 的老环境：退回存原始发丝列表
+      paths[k] = list
+    }
+  }
+  return { keys: keys, paths: paths, tones: tones }
+}
+
+function fillStrands(ctx, strands, ramp, buckets) {
+  const groups = {}
+  for (let i = 0; i < strands.length; i++) {
+    const s = strands[i]
+    let lvl = Math.round(((s.tone + 1) / 2) * (buckets - 1))
+    if (lvl < 0) lvl = 0
+    if (lvl > buckets - 1) lvl = buckets - 1
+    if (!groups[lvl]) groups[lvl] = []
+    groups[lvl].push(s)
+  }
+  const keys = []
+  for (const k in groups) keys.push(Number(k))
+  keys.sort(function (a, b) { return a - b })
+
+  for (let ki = 0; ki < keys.length; ki++) {
+    const k = keys[ki]
+    const tone = (k / (buckets - 1)) * 2 - 1
+    const color = E.toneColor(ramp, tone)
+    const list = groups[k]
+    ctx.beginPath()
+    for (let i = 0; i < list.length; i++) {
+      const poly = E.polygon(list[i])
+      ctx.moveTo(poly[0][0], poly[0][1])
+      for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j][0], poly[j][1])
+      ctx.closePath()
+    }
+    ctx.fillStyle = color
+    ctx.fill()
+  }
+}
+
+/**
+ * 用预分桶的 Path2D 填色（换色快路径）。
+ * 没有 Path2D 时退化成 fillStrands。
+ */
+function fillBuckets(ctx, bucket, ramp) {
+  if (!bucket || !bucket.keys) {
+    return false
+  }
+  for (let ki = 0; ki < bucket.keys.length; ki++) {
+    const k = bucket.keys[ki]
+    const p = bucket.paths[k]
+    if (p instanceof Path2D) {
+      ctx.fillStyle = E.toneColor(ramp, bucket.tones[k])
+      ctx.fill(p)
+    } else {
+      ctx.beginPath()
+      for (let i = 0; i < p.length; i++) {
+        const poly = E.polygon(p[i])
+        ctx.moveTo(poly[0][0], poly[0][1])
+        for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j][0], poly[j][1])
+        ctx.closePath()
+      }
+      ctx.fillStyle = E.toneColor(ramp, bucket.tones[k])
+      ctx.fill()
+    }
+  }
+  return true
+}
+
+/**
+ * 主绘制：在已建立好 200x240 坐标系的 ctx 上画一款发型。
+ * 层次（由后到前）：
+ *   1 投影  2 发块渐变  3 主体发丝  4 光泽  5 边缘破碎发丝  6 飞发
+ */
+function paint(ctx, geom, ramp, detail, buckets) {
+  const low = detail === 'low'
+  // buckets：可选的预分桶缓存（{body, sep, edge}），
+  // 由 getBaked 的换色快路径传入。传了就跳过发丝遍历与多边形展开。
+  const B = buckets || null
+
+  /* --- 0. 发型投在脸上的阴影 ---
+     没有这层，头发看起来是"贴"在照片上而不是"盖"在头上。
+     做法是标准技巧：把形状本体用 shadowOffsetX 推出画面外，
+     只留下它的影子落在原位；再把影子裁进脸部椭圆里，
+     这样只会暗在额头和脸颊上，不会糊到背景。 */
+  if (!low) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.save()
+    ctx.translate(100, 118)
+    ctx.scale(52, 66)
+    ctx.arc(0, 0, 1, 0, Math.PI * 2)
+    ctx.restore()
+    ctx.clip()
+    ctx.translate(0, 4)
+    ctx.shadowColor = 'rgba(0,0,0,0.62)'
+    ctx.shadowBlur = 7
+    ctx.shadowOffsetX = 6000
+    ctx.shadowOffsetY = 0
+    ctx.fillStyle = '#000'
+    for (let i = 0; i < geom.outline.length; i++) {
+      ctx.beginPath()
+      tracePath(ctx, geom.outline[i])
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /* --- 1. 底层投影：把发型从脸上"托"起来 --- */
+  if (!low) {
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.52)'
+    ctx.shadowBlur = 9
+    ctx.shadowOffsetY = 4
+    ctx.fillStyle = ramp.shadow
+    for (let i = 0; i < geom.outline.length; i++) {
+      ctx.beginPath()
+      tracePath(ctx, geom.outline[i])
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  /* --- 2. 发块渐变：填住发丝之间的空隙，定整体明暗 ---
+     必须压暗，它是"底"，亮度由上面的发丝负责。
+     底越暗，发丝缝隙才越像真实头发的暗谷。 */
+  ctx.save()
+  const g = ctx.createLinearGradient(0, 26, 0, 240)
+  g.addColorStop(0, E.shade(ramp.base, -0.32))
+  g.addColorStop(0.35, E.shade(ramp.base, -0.18))
+  g.addColorStop(0.72, E.shade(ramp.base, -0.30))
+  g.addColorStop(1, ramp.shadow)
+  ctx.fillStyle = g
+  for (let i = 0; i < geom.outline.length; i++) {
+    ctx.beginPath()
+    tracePath(ctx, geom.outline[i])
+    ctx.fill()
+  }
+  ctx.restore()
+
+  /* --- 3. 主体发丝 --- */
+  if (B && B.body) fillBuckets(ctx, B.body, ramp)
+  else fillStrands(ctx, geom.body, ramp, low ? 10 : 15)
+
+  /* --- 4. 光泽：裁剪在发块内，用径向渐变模拟镜面反射 ---
+     高光已经主要由发丝的 spec 项承担，这里只做一层柔和的补充，
+     加太多会把深色头发冲成灰白。 */
+  ctx.save()
+  ctx.beginPath()
+  for (let i = 0; i < geom.outline.length; i++) tracePath(ctx, geom.outline[i])
+  ctx.clip()
+
+  const sh = geom.sheen
+  const sa = sh.a * 0.5
+  const rg = ctx.createRadialGradient(sh.x, sh.y, 0, sh.x, sh.y, sh.r)
+  rg.addColorStop(0, E.rgba(ramp.sheen, sa))
+  rg.addColorStop(0.45, E.rgba(ramp.sheen, sa * 0.38))
+  rg.addColorStop(1, E.rgba(ramp.sheen, 0))
+  ctx.globalCompositeOperation = 'lighter'
+  ctx.fillStyle = rg
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H)
+
+  // 第二处弱高光，打破单一光源的死板
+  const rg2 = ctx.createRadialGradient(sh.x + 34, sh.y + 26, 0, sh.x + 34, sh.y + 26, sh.r * 0.7)
+  rg2.addColorStop(0, E.rgba(ramp.sheen, sa * 0.42))
+  rg2.addColorStop(1, E.rgba(ramp.sheen, 0))
+  ctx.fillStyle = rg2
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H)
+  ctx.restore()
+
+  /* --- 5. 发束分隔暗线：放在光泽之后，否则会被加法混合冲淡 --- */
+  if (geom.sep && geom.sep.length) {
+    ctx.save()
+    ctx.globalAlpha = 0.55
+    if (B && B.sep) fillBuckets(ctx, B.sep, ramp)
+    else fillStrands(ctx, geom.sep, ramp, 3)
+    ctx.restore()
+  }
+
+  /* --- 6. 边缘破碎发丝：消除矢量硬边 --- */
+  if (geom.edge.length) {
+    if (B && B.edge) fillBuckets(ctx, B.edge, ramp)
+    else fillStrands(ctx, geom.edge, ramp, 8)
+  }
+
+  /* --- 7. 飞发：少量高亮细丝，增加"活"的感觉 --- */
+  if (geom.fly.length) {
+    ctx.save()
+    ctx.globalAlpha = 0.7
+    fillStrands(ctx, geom.fly, ramp, 6)
+    ctx.restore()
+  }
+}
+
+/* ---------------- 离屏烘焙 ---------------- */
+
+// 真机 dpr 通常 3，头部盒子在 canvas 像素里可能宽达 900px。
+// 烘焙太小会被放大糊掉，所以取 3 倍（600x720），
+// 桌面实测烘焙 23~54ms，真机大约 2~4 倍。
+// 早期只留 2 张，实测用户浏览 10 款发型时命中率 0% ——
+// 每切一款都要重新烘焙，卡顿感非常明显。
+// 现在按「当前发型 + 左右相邻两款」预热，覆盖用户左右滑动的路径；
+// 缓存上限放到 6 张（约 10MB），低端机也能接受。
+const BAKE_SCALE = 3.0
+const bakeCache = {}
+const BAKE_ORDER = []
+const BAKE_MAX = 6
+// 烘焙失败后不再每帧重试，否则会退化成每帧全量绘制（约 40ms/帧）
+let bakeUnavailable = false
+
+/** 取某款发型的 sheen 配置（索引图上色时补光泽用） */
+function geomSheen(style) {
+  return (style && style.sheen) || { x: 72, y: 54, r: 52, a: 0.2 }
+}
+
+function hasOffscreen() {
+  return typeof wx !== 'undefined' && typeof wx.createOffscreenCanvas === 'function'
+}
+
+/**
+ * 把发型预烘焙到离屏画布。之后每帧只需 drawImage，
+ * 实时预览才能稳住帧率（否则 600 条发丝每帧重绘会掉到 20fps 以下）。
+ */
+/* ---- 换色快路径 ----
+ * 曾经想用「tone 编码进 RGB 通道的索引图」让换发色不重绘，
+ * 实测走不通：canvas 的半透明像素会做 alpha 预乘，
+ * 编码位被乘掉后反推出来的 tone 完全错，
+ * 30 组对比里最大通道差 88（buzz/honey），整张图颜色都是花的。
+ *
+ * 真正可行的快路径是「按发型缓存分桶后的路径，换色只重填色」：
+ * fillStrands 已经把发丝按 tone 分成了 15 个桶，每个桶一条 path。
+ * 把每条 path 缓存下来，换色时只需要改 15 次 fillStyle 再 fill，
+ * 不需要重新遍历 600 条发丝、不需要重新做多边形展开。
+ */
+const bucketCache = {}
+const BUCKET_ORDER = []
+const BUCKET_MAX = 4
+
+/**
+ * 取（或生成）某款发型的预分桶路径。
+ * 只跟发型有关，与颜色无关，所以可以跨发色复用。
+ */
+function getBuckets(styleId) {
+  const key = styleId
+  if (bucketCache[key]) return bucketCache[key]
+  if (typeof Path2D === 'undefined') return null
+
+  const style = getStyle(styleId)
+  const geom = getGeom(style, 'high')
+  let b
+  try {
+    b = {
+      body: bucketize(geom.body, 15),
+      sep: geom.sep && geom.sep.length ? bucketize(geom.sep, 3) : null,
+      edge: geom.edge.length ? bucketize(geom.edge, 8) : null
+    }
+  } catch (e) {
+    return null
+  }
+  bucketCache[key] = b
+  BUCKET_ORDER.push(key)
+  while (BUCKET_ORDER.length > BUCKET_MAX) {
+    const old = BUCKET_ORDER.shift()
+    delete bucketCache[old]
+  }
+  return b
+}
+
+function getBaked(styleId, colorId, detail) {
+  if (detail === 'low' || bakeUnavailable) return null
+  const key = styleId + '|' + colorId
+  if (bakeCache[key]) return bakeCache[key]
+  if (!hasOffscreen()) {
+    bakeUnavailable = true
+    return null
+  }
+
+  // 快路径：同发型的分桶路径已生成过，换色只需重填色。
+  // 省掉「遍历全部发丝 + 每条做一次多边形展开」——
+  // 实测那两步占整个烘焙的六成以上。
+  const buckets = getBuckets(styleId)
+  if (buckets) {
+    const style = getStyle(styleId)
+    const color = getColor(colorId)
+    const geom = getGeom(style, 'high')
+    let canvas
+    let ctx
+    try {
+      canvas = wx.createOffscreenCanvas({ type: '2d', width: Math.round(VIEW_W * BAKE_SCALE), height: Math.round(VIEW_H * BAKE_SCALE) })
+      ctx = canvas.getContext('2d')
+    } catch (e) {
+      bakeUnavailable = true
+      return null
+    }
+    if (ctx) {
+      try {
+        ctx.scale(BAKE_SCALE, BAKE_SCALE)
+        paint(ctx, geom, color.ramp, 'high', buckets)
+        bakeCache[key] = canvas
+        BAKE_ORDER.push(key)
+        while (BAKE_ORDER.length > BAKE_MAX) {
+          const old = BAKE_ORDER.shift()
+          delete bakeCache[old]
+        }
+        return canvas
+      } catch (e) {
+        bakeUnavailable = true
+        return null
+      }
+    }
+  }
+
+  const W = Math.round(VIEW_W * BAKE_SCALE)
+  const H = Math.round(VIEW_H * BAKE_SCALE)
+  let canvas
+  let ctx
+  try {
+    canvas = wx.createOffscreenCanvas({ type: '2d', width: W, height: H })
+    ctx = canvas.getContext('2d')
+  } catch (e) {
+    bakeUnavailable = true
+    return null
+  }
+  if (!ctx) {
+    bakeUnavailable = true
+    return null
+  }
+
+  const style = getStyle(styleId)
+  const color = getColor(colorId)
+  const geom = getGeom(style, 'high')
+
+  try {
+    ctx.scale(BAKE_SCALE, BAKE_SCALE)
+    paint(ctx, geom, color.ramp, 'high')
+  } catch (e) {
+    bakeUnavailable = true
+    return null
+  }
+
+  bakeCache[key] = canvas
+  BAKE_ORDER.push(key)
+  while (BAKE_ORDER.length > BAKE_MAX) {
+    const old = BAKE_ORDER.shift()
+    delete bakeCache[old]
+  }
+  return canvas
+}
+
+/**
+ * 预热：提前把发型烘焙好。
+ *
+ * 除了当前发型，还把左右相邻两款一起烘焙 —— 用户在发型横滑里
+ * 最自然的操作就是点左右邻款，提前准备好相邻两款，
+ * 滑动过程中就一次都不会卡（实测只留 2 张缓存时命中率 0%）。
+ *
+ * 预热是同步的，单次几十毫秒；放在 setData 回调里执行，
+ * 此时选中态已经画出来了，用户感知不到这几十毫秒。
+ */
+function prewarm(styleId, colorId) {
+  getBaked(styleId, colorId, 'high')
+
+  // 相邻两款：索引 ±1（循环）
+  const list = HAIR_STYLES
+  let idx = -1
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === styleId) { idx = i; break }
+  }
+  if (idx < 0) return
+  const prev = list[(idx - 1 + list.length) % list.length]
+  const next = list[(idx + 1) % list.length]
+  if (prev) getBaked(prev.id, colorId, 'high')
+  if (next) getBaked(next.id, colorId, 'high')
+}
+
+/**
+ * 在 canvas 上绘制一款发型
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{x:number,y:number,w:number,h:number,angle:number}} box 目标矩形（canvas 像素）
+ * @param {string} styleId
+ * @param {string} colorId
+ * @param {number} alpha 整体不透明度
+ */
+function drawHair(ctx, box, styleId, colorId, alpha) {
+  const a = typeof alpha === 'number' ? alpha : 1
+  if (a <= 0.001) return
+
+  ctx.save()
+  if (box.angle) {
+    const cx = box.x + box.w / 2
+    const cy = box.y + box.h / 2
+    ctx.translate(cx, cy)
+    ctx.rotate(box.angle)
+    ctx.translate(-cx, -cy)
+  }
+  ctx.globalAlpha = a
+
+  // 优先走烘焙位图
+  const baked = getBaked(styleId, colorId, 'high')
+  if (baked) {
+    ctx.drawImage(baked, box.x, box.y, box.w, box.h)
+    ctx.restore()
+    return
+  }
+
+  // 降级：直接矢量绘制。用 mid 精度而不是 high ——
+  // 这条路径每帧都要跑，high 精度 600 条发丝会掉到 20fps 以下。
+  const style = getStyle(styleId)
+  const color = getColor(colorId)
+  const geom = getGeom(style, 'mid')
+  ctx.translate(box.x, box.y)
+  ctx.scale(box.w / VIEW_W, box.h / VIEW_H)
+  paint(ctx, geom, color.ramp, 'mid')
+  ctx.restore()
+}
+
+/* ---------------- SVG 缩略图 ---------------- */
+
+function svgBody(geom, ramp, gid, prec) {
+  let s = ''
+
+  // 发块
+  for (let i = 0; i < geom.outline.length; i++) {
+    s += '<path d="' + E.opsToD(geom.outline[i], prec) + '" fill="url(#' + gid + ')"/>'
+  }
+
+  // 发丝：按色调分桶，每桶一条 path（多段子路径合并），显著省字节
+  const buckets = 9
+  const groups = {}
+  const all = geom.body.concat(geom.edge)
+  for (let i = 0; i < all.length; i++) {
+    const st = all[i]
+    let lvl = Math.round(((st.tone + 1) / 2) * (buckets - 1))
+    if (lvl < 0) lvl = 0
+    if (lvl > buckets - 1) lvl = buckets - 1
+    if (!groups[lvl]) groups[lvl] = ''
+    groups[lvl] += E.polyToD(E.polygon(st), prec)
+  }
+  for (const k in groups) {
+    const tone = (Number(k) / (buckets - 1)) * 2 - 1
+    s += '<path d="' + groups[k] + '" fill="' + E.toneColor(ramp, tone) + '"/>'
+  }
+
+  // 发束分隔暗线
+  if (geom.sep && geom.sep.length) {
+    let d = ''
+    for (let i = 0; i < geom.sep.length; i++) d += E.polyToD(E.polygon(geom.sep[i]), prec)
+    s += '<path d="' + d + '" fill="' + ramp.shadow + '" opacity="0.55"/>'
+  }
+  return s
+}
+
+/**
+ * 生成发型的 SVG 字符串。
+ * detail='low' 供缩略图（小体积），detail='high' 供调试与截图检查。
+ */
+function buildSvg(styleId, colorId, detail) {
+  const style = getStyle(styleId)
+  const color = getColor(colorId)
+  const ramp = color.ramp
+  const geom = getGeom(style, detail === 'high' ? 'high' : 'low')
+  const gid = 'g' + style.id
+  const sid = 's' + style.id
+  const sh = geom.sheen
+  const prec = detail === 'high' ? 1 : 0
+
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" width="200" height="240">' +
+    '<defs>' +
+    '<linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="' + E.shade(ramp.base, -0.32) + '"/>' +
+    '<stop offset="0.35" stop-color="' + E.shade(ramp.base, -0.18) + '"/>' +
+    '<stop offset="0.72" stop-color="' + E.shade(ramp.base, -0.30) + '"/>' +
+    '<stop offset="1" stop-color="' + ramp.shadow + '"/>' +
+    '</linearGradient>' +
+    '<radialGradient id="' + sid + '">' +
+    '<stop offset="0" stop-color="' + ramp.sheen + '" stop-opacity="' + (sh.a * 0.5) + '"/>' +
+    '<stop offset="0.5" stop-color="' + ramp.sheen + '" stop-opacity="' + (sh.a * 0.18) + '"/>' +
+    '<stop offset="1" stop-color="' + ramp.sheen + '" stop-opacity="0"/>' +
+    '</radialGradient>' +
+    '</defs>' +
+    '<ellipse cx="100" cy="118" rx="57" ry="73" fill="#c8ab93" opacity="0.11"/>' +
+    svgBody(geom, ramp, gid, prec) +
+    '<ellipse cx="' + sh.x + '" cy="' + sh.y + '" rx="' + sh.r + '" ry="' + (sh.r * 0.8) +
+    '" fill="url(#' + sid + ')"/>' +
+    '</svg>'
+  )
+}
+
+/**
+ * 生成发型缩略图（data URI），可直接给 <image src> 使用。
+ * 走低精度几何，控制在 10KB 以内，避免 WXML 数据膨胀。
+ */
+function buildThumb(styleId, colorId) {
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(buildSvg(styleId, colorId, 'low'))
+}
+
+window.__HS = {
+  VIEW_W: VIEW_W,
+  VIEW_H: VIEW_H,
+  HAIR_STYLES: HAIR_STYLES,
+  HAIR_COLORS: HAIR_COLORS,
+  getStyle: getStyle,
+  getColor: getColor,
+  getGeom: getGeom,
+  prewarm: prewarm,
+  drawHair: drawHair,
+  buildThumb: buildThumb,
+  buildSvg: buildSvg,
+  // 测试用：索引图烘焙/上色链路必须能在 canvas 里逐像素比对，
+  // 否则换发色后色偏了也发现不了。
+  _engine: E,
+  _paint: paint,
+  _fillStrands: fillStrands,
+  _bucketize: bucketize,
+  _getBuckets: getBuckets,
+  _fillBuckets: fillBuckets
+}
+</script><script>var wx = { createOffscreenCanvas: function(o){ var c=document.createElement("canvas"); c.width=o.width; c.height=o.height; return c } };
+window.onerror=function(m,s,l){document.title="ERR "+m+" L"+l};
+</script><script>
+const HS = window.__HS
+const out = []
+function T(label, fn, rep) {
+  fn()
+  const t0 = performance.now()
+  for (let i = 0; i < rep; i++) fn()
+  const t1 = performance.now()
+  out.push(label + ': ' + ((t1-t0)/rep).toFixed(2) + 'ms/次')
+}
+const sid = HS.HAIR_STYLES[3].id
+const cid = HS.HAIR_COLORS[4].id
+const geom = HS.getGeom(HS.getStyle(sid), 'high')
+const ramp = HS.getColor(cid).ramp
+const buckets = HS._getBuckets(sid)
+function mk() {
+  const c = document.createElement('canvas')
+  c.width = 600; c.height = 720
+  const ctx = c.getContext('2d')
+  ctx.scale(3, 3)
+  return ctx
+}
+T('完整 paint', () => { HS._paint(mk(), geom, ramp, 'high') }, 20)
+T('只画主体发丝(遍历)', () => { HS._fillStrands(mk(), geom.body, ramp, 15) }, 20)
+T('只画主体发丝(Path2D)', () => { HS._fillBuckets(mk(), buckets.body, ramp) }, 20)
+T('只做 bucketize(不画)', () => { HS._bucketize(geom.body, 15) }, 20)
+T('只做 polygon 展开', () => { const E = HS._engine; for (const s of geom.body) E.polygon(s) }, 20)
+T('空 fillRect', () => { const x = mk(); x.fillRect(0,0,200,240) }, 20)
+T('光泽层', () => {
+  const x = mk()
+  const sh = geom.sheen
+  x.save(); x.beginPath()
+  for (const o of geom.outline) for (const op of o) {
+    if(op[0]==='M')x.moveTo(op[1],op[2]); else if(op[0]==='L')x.lineTo(op[1],op[2]); else if(op[0]==='C')x.bezierCurveTo(op[1],op[2],op[3],op[4],op[5],op[6]);
+  }
+  x.clip()
+  const rg = x.createRadialGradient(sh.x, sh.y, 0, sh.x, sh.y, sh.r)
+  rg.addColorStop(0, HS._engine.rgba(ramp.sheen, 0.1))
+  rg.addColorStop(1, HS._engine.rgba(ramp.sheen, 0))
+  x.fillStyle = rg; x.fillRect(0,0,200,240); x.restore()
+}, 20)
+T('阴影层', () => {
+  const x = mk()
+  x.save(); x.shadowColor='rgba(0,0,0,0.62)'; x.shadowBlur=7; x.shadowOffsetX=6000; x.shadowOffsetY=0
+  x.fillStyle='#000'
+  for (const o of geom.outline) { x.beginPath()
+    for (const op of o) { if(op[0]==='M')x.moveTo(op[1],op[2]); else if(op[0]==='L')x.lineTo(op[1],op[2]); else if(op[0]==='C')x.bezierCurveTo(op[1],op[2],op[3],op[4],op[5],op[6]); }
+    x.fill() }
+  x.restore()
+}, 20)
+out.push('发丝总数 ' + geom.body.length + '  桶数 ' + buckets.body.keys.length)
+document.body.textContent = out.join('\n')
+</script></body></html>

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>取景框三态预览</title>
+<style>
+  /* 这个文件只是给人工检查用的静态预览：把 wxss 里 .face-guide 的样式
+     按 rpx→px（375 屏宽下 1rpx = 0.5px）换算过来，配上模拟的摄像头画面。
+     它不参与测试，也不打包进小程序。 */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0b0b12; font-family: -apple-system, "PingFang SC", sans-serif; padding: 24px; }
+  .row { display: flex; gap: 24px; }
+  .wrap { width: 300px; }
+  .phone {
+    position: relative; width: 375px; height: 667px; overflow: hidden;
+    transform: scale(0.8); transform-origin: top left;
+    border-radius: 12px; background: #17171f;
+  }
+  .holder { height: 534px; overflow: hidden; border-radius: 10px; }
+
+  .bg { position: absolute; inset: 0; background: linear-gradient(180deg, #2a2a36 0%, #1b1b26 55%, #12121a 100%); }
+  .bg.light { background: linear-gradient(180deg, #e8e4de 0%, #d9d3ca 55%, #c9c2b8 100%); }
+  .head {
+    position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
+    width: 168px; height: 208px; border-radius: 50%;
+    background: radial-gradient(circle at 50% 38%, #6d5f57 0%, #554a44 62%, #3d3531 100%);
+  }
+  .head.turned { width: 118px; border-radius: 60% 40% 40% 60% / 50% 50% 50% 50%; }
+  .neck {
+    position: absolute; left: 50%; top: 56%; transform: translateX(-50%);
+    width: 84px; height: 120px; background: #4a403b; border-radius: 12px;
+  }
+
+  .face-guide { position: absolute; z-index: 6; transform: translate(-50%, -50%); pointer-events: none; }
+  .fg-ring {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    border: 1.5px dashed rgba(255, 255, 255, 0.5);
+    border-radius: 52% 52% 46% 46% / 46% 46% 54% 54%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+  }
+
+  .face-guide.is-aligning .fg-ring { border-style: solid; border-color: rgba(224, 168, 111, 0.9); }
+  .face-guide.is-locked .fg-ring { border-style: solid; border-color: rgba(224, 168, 111, 0.34); }
+
+  .fg-hint {
+    position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+    margin-top: 9px; padding: 6px 13px; border-radius: 15px;
+    background: rgba(16, 16, 24, 0.78); color: #f4d7b4;
+    font-size: 12.5px; white-space: nowrap;
+  }
+
+  .pill {
+    position: absolute; left: 14px; top: 56px; z-index: 10;
+    display: flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 13px; border-radius: 15px;
+    background: rgba(20, 20, 30, 0.55); border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.72); font-size: 11.5px; white-space: nowrap;
+  }
+  .pill.on { color: #e0a86f; border-color: rgba(224, 168, 111, 0.45); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.5); }
+  .pill.on .dot { background: #e0a86f; }
+
+  .caption { margin-top: 10px; color: #9a9aae; font-size: 12px; text-align: center; }
+  .caption b { color: #e0a86f; font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="wrap">
+    <div class="holder">
+      <div class="phone">
+        <div class="bg"><div class="neck"></div><div class="head"></div></div>
+        <div class="pill"><span class="dot"></span><span>正在寻找人脸…</span></div>
+        <div class="face-guide is-idle" style="left:187.5px; top:266.8px; width:225px; height:274.5px;">
+          <div class="fg-ring"></div>
+        </div>
+      </div>
+    </div>
+    <div class="caption"><b>idle</b>　还没检测到脸</div>
+  </div>
+
+  <div class="wrap">
+    <div class="holder">
+      <div class="phone">
+        <div class="bg"><div class="neck"></div><div class="head" style="left:36%; top:44%;"></div></div>
+        <div class="pill on"><span class="dot"></span><span>往右一点</span></div>
+        <div class="face-guide is-aligning" style="left:187.5px; top:266.8px; width:225px; height:274.5px;">
+          <div class="fg-ring"></div>
+          <div class="fg-hint">往右一点</div>
+        </div>
+      </div>
+    </div>
+    <div class="caption"><b>aligning</b>　检测到但没对齐</div>
+  </div>
+
+  <div class="wrap">
+    <div class="holder">
+      <div class="phone">
+        <div class="bg light"><div class="neck"></div><div class="head"></div></div>
+        <div class="pill"><span class="dot"></span><span>已对齐 · 实时试戴中</span></div>
+        <div class="face-guide is-locked" style="left:187.5px; top:266.8px; width:225px; height:274.5px;">
+          <div class="fg-ring"></div>
+        </div>
+      </div>
+    </div>
+    <div class="caption"><b>locked · 浅色背景</b>　验证亮底下还看得见</div>
+  </div>
+
+  <div class="wrap">
+    <div class="holder">
+      <div class="phone">
+        <div class="bg"><div class="neck"></div><div class="head turned"></div></div>
+        <div class="pill on"><span class="dot"></span><span>正对镜头</span></div>
+        <div class="face-guide is-aligning" style="left:187.5px; top:266.8px; width:225px; height:274.5px;">
+          <div class="fg-ring"></div>
+          <div class="fg-hint">正对镜头</div>
+        </div>
+      </div>
+    </div>
+    <div class="caption"><b>侧脸</b>　宽高比反推 yaw</div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<view class="page">
+  <view class="head" style="padding-top: {{topPad}}px;">
+    <view class="profile-row">
+      <button
+        class="avatar-btn"
+        open-type="chooseAvatar"
+        bindchooseavatar="onChooseAvatar"
+        aria-label="{{profile.avatarUrl ? '更换头像' : '选择头像'}}"
+      >
+        <!-- binderror：头像存在 saveFile 的本地目录里，可能被系统当缓存清掉。
+             没有兜底的话这里就是一块空白，用户以为自己没设过头像。 -->
+        <image
+          wx:if="{{profile.avatarUrl}}"
+          class="avatar-img"
+          src="{{profile.avatarUrl}}"
+          mode="aspectFill"
+          binderror="onAvatarError"
+        />
+        <view wx:else class="avatar-empty">
+          <text class="avatar-empty-text" aria-hidden="true">+</text>
+        </view>
+      </button>
+
+      <view class="profile-main">
+        <input
+          class="nickname-input"
+          type="nickname"
+          value="{{profile.nickName}}"
+          placeholder="点这里填写昵称"
+          placeholder-class="nickname-ph"
+          maxlength="20"
+          bindblur="onNicknameBlur"
+          aria-label="昵称，最多 20 个字"
+        />
+        <text class="profile-sub">{{cloudLabel}}</text>
+      </view>
+    </view>
+
+    <view class="stats" aria-role="text" aria-label="试戴记录 {{stat.records}} 条，收藏发型 {{stat.favs}} 款，已使用 {{stat.days}} 天">
+      <view class="stat">
+        <text class="stat-num">{{stat.records}}</text>
+        <text class="stat-label">试戴记录</text>
+      </view>
+      <view class="stat-div"></view>
+      <view class="stat">
+        <text class="stat-num">{{stat.favs}}</text>
+        <text class="stat-label">收藏发型</text>
+      </view>
+      <view class="stat-div"></view>
+      <view class="stat">
+        <text class="stat-num">{{stat.days}}</text>
+        <text class="stat-label">使用天数</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 收藏 -->
+  <view class="block">
+    <view class="block-head">
+      <text class="h3">我的收藏</text>
+      <text class="block-more" bindtap="goGallery" aria-role="button" aria-label="去发型库">去发型库</text>
+    </view>
+
+    <scroll-view
+      wx:if="{{favStyles.length > 0}}"
+      scroll-x
+      class="fav-strip"
+      enhanced="{{true}}"
+      show-scrollbar="{{false}}"
+      catchtouchstart="onFavTouchStart"
+      catchtouchmove="onFavTouchMove"
+      bindtouchcancel="onFavTouchCancel"
+    >
+      <view class="fav-inner">
+        <view
+          wx:for="{{favStyles}}"
+          wx:key="id"
+          class="fav-card"
+          data-id="{{item.id}}"
+          bindtap="openFav"
+          aria-role="button"
+          aria-label="收藏的发型 {{item.name}}，点击试戴"
+        >
+          <image class="fav-thumb" src="{{item.thumb}}" mode="aspectFit" />
+          <text class="fav-name">{{item.name}}</text>
+        </view>
+      </view>
+    </scroll-view>
+
+    <view wx:else class="fav-empty">
+      <text>还没有收藏，试戴时点「☆ 收藏」就能存下来</text>
+    </view>
+  </view>
+
+  <!-- 设置 -->
+  <view class="block">
+    <view class="block-head">
+      <text class="h3">设置</text>
+    </view>
+
+    <view class="row-list">
+      <view class="row">
+        <text class="row-label">云端同步</text>
+        <text class="row-value {{cloudReady ? 'is-on' : ''}}">{{cloudLabel}}</text>
+      </view>
+
+      <view class="row" bindtap="showAbout" aria-role="button" aria-label="关于镜界 AR">
+        <text class="row-label">关于镜界 AR</text>
+        <text class="row-value" aria-hidden="true">v1.0.0 ›</text>
+      </view>
+
+      <view class="row" bindtap="showPrivacy" aria-role="button" aria-label="相机与照片说明">
+        <text class="row-label">相机与照片说明</text>
+        <text class="row-value" aria-hidden="true">›</text>
+      </view>
+
+      <!-- 危险操作必须让读屏用户也听出来。只念「清除本机数据」和
+           念「清除本机数据，不可恢复」是两回事，后者才会让人停一下。 -->
+      <view class="row row-danger" bindtap="clearAllData" aria-role="button" aria-label="清除本机数据，删除后不可恢复">
+        <text class="row-label">清除本机数据</text>
+        <text class="row-value" aria-hidden="true">›</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="footer">
+    <text class="footer-line">镜界造型 · MIRROR LAB</text>
+    <text class="footer-line dim">发型预览仅供沟通参考，最终效果以发型师现场确认为准</text>
+  </view>
+
+  <view class="safe-bottom"></view>
+</view>

@@ -1,0 +1,80 @@
+<view class="page">
+  <view class="head" style="padding-top: {{topPad}}px;">
+    <view class="head-top">
+      <text class="h1">试戴记录</text>
+      <!-- 「清空」是一按就没的破坏性操作，读屏必须把后果念出来 -->
+      <text wx:if="{{records.length > 0}}" class="clear" bindtap="clearAll"
+        aria-role="button" aria-label="清空全部试戴记录，删除后不可恢复">清空</text>
+    </view>
+    <text class="head-desc" aria-role="text" aria-label="共 {{records.length}} 条记录，保存在本机，长按可删除">{{records.length}} 条记录 · 保存在本机，长按可删除</text>
+  </view>
+
+  <view wx:if="{{records.length === 0}}" class="empty">
+    <text class="icon" aria-hidden="true">▤</text>
+    <text class="title">还没有试戴记录</text>
+    <text class="desc">去镜子里试戴一款发型，按下快门就会保存在这里</text>
+    <view class="empty-btn" bindtap="goTryon" aria-role="button" aria-label="开始试戴">开始试戴</view>
+  </view>
+
+  <view wx:else class="list">
+    <view
+      wx:for="{{records}}"
+      wx:key="id"
+      class="rec"
+      data-id="{{item.id}}"
+      data-index="{{index}}"
+      bindtap="openRecord"
+      bindlongpress="confirmRemove"
+      aria-role="button"
+      aria-label="{{item.styleName}}，{{item.colorName}}，{{item.timeText}}{{item.thumbPath ? '' : '，无照片'}}。长按可删除"
+    >
+      <view class="rec-visual">
+        <!-- binderror：本地保存的照片可能被微信按「缓存文件」清掉
+             （长期不打开、系统空间紧张时都会发生）。没有 binderror 的话
+             这张卡片就是一片空白，用户以为记录坏了。 -->
+        <image
+          wx:if="{{item.thumbPath}}"
+          class="rec-img"
+          src="{{item.thumbPath}}"
+          mode="aspectFill"
+          lazy-load
+          data-id="{{item.id}}"
+          binderror="onImgError"
+        />
+        <view wx:else class="rec-img rec-img-empty">
+          <text class="rec-img-empty-text">无照片</text>
+        </view>
+      </view>
+
+      <view class="rec-info">
+        <text class="rec-style">{{item.styleName}}</text>
+        <view class="rec-meta">
+          <!-- 发色已下架时没有 swatch，整块不画：给个空 background
+               会渲染成一个白色圆点，比不画更显眼 -->
+          <view wx:if="{{item.swatch}}" class="rec-color-dot" style="background: {{item.swatch}};"></view>
+          <text class="rec-color">{{item.colorName}}</text>
+        </view>
+        <text class="rec-time">{{item.timeText}}</text>
+      </view>
+
+      <!-- 分享按钮。catchtap 必须拦住冒泡，否则点分享会同时触发
+           父级 openRecord 把大图预览也打开，两个面板叠在一起。 -->
+      <button
+        class="rec-share"
+        hover-class="rec-share-hover"
+        open-type="share"
+        data-id="{{item.id}}"
+        catchtap="noop"
+        aria-label="分享这条 {{item.styleName}} 试戴记录"
+      >分享</button>
+
+      <view class="rec-arrow" aria-hidden="true">›</view>
+    </view>
+  </view>
+
+  <view wx:if="{{records.length > 0}}" class="list-note">
+    <text>记录仅保存在这台设备上，换设备不会同步</text>
+  </view>
+
+  <view class="safe-bottom"></view>
+</view>

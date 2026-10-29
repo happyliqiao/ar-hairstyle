@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>自动匹配卡片 · 三态预览</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0e0e14;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #f2f0ee;
+    padding: 28px 20px 40px;
+  }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .5px; color: #cfcac4; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: rgba(255,255,255,.34); margin-bottom: 22px; }
+  .wrap { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; }
+  .holder { width: 300px; }
+  .phone {
+    position: relative; width: 300px; height: 534px;
+    border-radius: 22px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.1);
+    background: #14141c;
+  }
+  .bg { position: absolute; inset: 0; background: linear-gradient(180deg, #2b2b38 0%, #1b1b26 55%, #12121a 100%); }
+  .head {
+    position: absolute; left: 50%; top: 158px; transform: translateX(-50%);
+    width: 118px; height: 150px; border-radius: 52% 52% 46% 46% / 46% 46% 54% 54%;
+    background: #8d6a54;
+  }
+  .hair {
+    position: absolute; left: 50%; top: 116px; transform: translateX(-50%);
+    width: 146px; height: 112px;
+    border-radius: 60% 60% 20% 20% / 78% 78% 22% 22%;
+    background: #241a14;
+  }
+  .neck {
+    position: absolute; left: 50%; top: 304px; transform: translateX(-50%);
+    width: 54px; height: 70px; background: #7c5c49;
+  }
+
+  .panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding-top: 10px;
+    background: linear-gradient(to top, rgba(8,8,14,.97) 30%, rgba(8,8,14,.72) 75%, rgba(8,8,14,0) 100%);
+  }
+
+  /* ---- 自动匹配卡片 ---- */
+  .rec-card {
+    margin: 0 14px 9px 14px;
+    padding: 10px 12px 9px 12px;
+    border-radius: 11px;
+    background: rgba(26,24,30,.92);
+    border: 1px solid rgba(224,168,111,.26);
+  }
+  .rec-head { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+  .rec-badge { font-size: 10px; color: #1a1613; background: #e0a86f; padding: 1.5px 6px; border-radius: 99px; }
+  .rec-shape { font-size: 10.5px; color: rgba(255,255,255,.45); }
+  .rec-close { margin-left: auto; font-size: 16px; line-height: 1; color: rgba(255,255,255,.42); }
+  .rec-main { display: flex; align-items: baseline; gap: 9px; }
+  .rec-title { font-size: 14px; font-weight: 600; color: #f2f0ee; }
+  .rec-use { font-size: 11px; color: #e0a86f; }
+  .rec-why-row { display: flex; align-items: flex-start; gap: 7px; margin-top: 3px; }
+  .rec-why { flex: 1; }
+  .rec-next { flex-shrink: 0; font-size: 10px; color: #e0a86f; padding: 0 6px; border: 1px solid rgba(224,168,111,.34); border-radius: 99px; }
+  .rec-why { display: block; margin-top: 3px; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.5); }
+  .rec-sub { margin-top: 5px; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.42); }
+  .rec-sub-key { display: block; color: rgba(255,255,255,.72); }
+  .rec-sub-why { display: block; color: rgba(255,255,255,.42); }
+  .rec-sub-warn { color: rgba(224,168,111,.72); }
+  .rec-shapes { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+  .rec-shapes-label { font-size: 10px; color: rgba(255,255,255,.3); margin-right: 1px; }
+  .rec-chip { font-size: 10.5px; color: rgba(255,255,255,.55); padding: 2.5px 9px; border-radius: 99px; border: 1px solid rgba(255,255,255,.16); }
+  .rec-chip.is-on { color: #1a1613; background: #e0a86f; border-color: #e0a86f; }
+
+  /* 卡片展开时接管面板：款式条 / 色带 / 标题行让位（与 wxss 同规则） */
+  .phone.card-mode .panel-head,
+  .phone.card-mode .strip,
+  .phone.card-mode .colors { display: none; }
+
+  .rec-mini {
+    display: flex; align-items: center; gap: 6px;
+    margin: 0 14px 6px 14px; padding: 4px 9px;
+    border-radius: 99px;
+    background: rgba(26,24,30,.86);
+    border: 1px solid rgba(224,168,111,.2);
+  }
+  .rec-mini-badge { font-size: 9.5px; color: #1a1613; background: rgba(224,168,111,.9); padding: 1px 5px; border-radius: 99px; }
+  .rec-mini-text { font-size: 10.5px; color: rgba(255,255,255,.6); flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .rec-mini-color { color: #e0a86f; }
+  .rec-mini-more { font-size: 10.5px; color: #e0a86f; }
+
+  .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 0 16px 10px; }
+  .panel-title { display: flex; align-items: center; gap: 8px; }
+  .style-current { font-size: 16px; font-weight: 600; }
+  .style-tag { font-size: 10px; color: #e0a86f; border: 1px solid rgba(224,168,111,.4); padding: 1px 6px; border-radius: 99px; }
+  .panel-actions { display: flex; gap: 12px; font-size: 11.5px; color: rgba(255,255,255,.55); }
+  .strip { display: flex; gap: 8px; padding: 0 16px 10px; }
+  .card { width: 44px; text-align: center; opacity: .55; }
+  .card.on { opacity: 1; }
+  .thumb { width: 44px; height: 44px; border-radius: 9px; background: #2a2833; border: 1px solid transparent; }
+  .card.on .thumb { border-color: #e0a86f; }
+  .card span { display: block; margin-top: 4px; font-size: 9px; color: rgba(255,255,255,.5); }
+  .colors { display: flex; gap: 8px; padding: 0 16px 12px; align-items: center; }
+  .sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(255,255,255,.15); }
+  .sw.on { box-shadow: 0 0 0 2px #e0a86f; }
+  .color-label { margin-left: 4px; font-size: 10px; color: rgba(255,255,255,.45); }
+  .shutter-row { display: flex; align-items: center; justify-content: space-between; padding: 0 34px 16px; }
+  .side { font-size: 10px; color: rgba(255,255,255,.45); text-align: center; width: 40px; }
+  .shutter { width: 46px; height: 46px; border-radius: 50%; border: 2px solid rgba(255,255,255,.7); display: grid; place-items: center; }
+  .shutter i { display: block; width: 34px; height: 34px; border-radius: 50%; background: #fff; }
+
+  .caption { margin-top: 10px; font-size: 11.5px; color: rgba(255,255,255,.4); text-align: center; }
+  .caption b { color: rgba(255,255,255,.72); font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>自动匹配卡片 · 三种状态</h1>
+  <div class="sub">尺寸按 375pt 屏 1:1 还原，卡片在底部面板顶部，不遮挡人脸</div>
+
+  <div class="wrap">
+
+    <!-- 1 已换上 -->
+    <div class="holder">
+      <div class="phone card-mode">
+        <div class="bg"></div>
+        <div class="hair"></div>
+        <div class="neck"></div>
+        <div class="head"></div>
+        <div class="panel">
+          <div class="rec-card">
+            <div class="rec-head">
+              <span class="rec-badge">按脸型匹配</span>
+              <span class="rec-shape">测得偏圆脸</span>
+              <span class="rec-close">×</span>
+            </div>
+            <div class="rec-main">
+              <span class="rec-title">已换上「背头」</span>
+            </div>
+            <div class="rec-why-row">
+              <span class="rec-why">顶部堆高，直接把脸型往上拉长</span>
+              <span class="rec-next">换一款</span>
+            </div>
+            <div class="rec-sub">
+              <span class="rec-sub-key">肤色中等，发色「栗棕」</span>
+              <span class="rec-sub-why">中明度最稳，不会抢脸色</span>
+            </div>
+            <div class="rec-shapes">
+              <span class="rec-shapes-label">判得不准？</span>
+              <span class="rec-chip is-on">圆脸</span>
+              <span class="rec-chip">标准</span>
+              <span class="rec-chip">长脸</span>
+            </div>
+          </div>
+          <div class="panel-head">
+            <div class="panel-title"><span class="style-current">背头</span><span class="style-tag">复古精英</span></div>
+            <div class="panel-actions"><span>微调</span><span>款式详情</span></div>
+          </div>
+          <div class="strip">
+            <div class="card"><div class="thumb"></div><span>寸头</span></div>
+            <div class="card"><div class="thumb"></div><span>短碎发</span></div>
+            <div class="card"><div class="thumb"></div><span>波波头</span></div>
+            <div class="card on"><div class="thumb"></div><span>背头</span></div>
+            <div class="card"><div class="thumb"></div><span>羊毛卷</span></div>
+          </div>
+          <div class="colors">
+            <div class="sw" style="background:#1b1a21"></div>
+            <div class="sw" style="background:#33231a"></div>
+            <div class="sw on" style="background:#57381f"></div>
+            <div class="sw" style="background:#7d6044"></div>
+            <div class="sw" style="background:#b3833c"></div>
+            <span class="color-label">栗棕</span>
+          </div>
+          <div class="shutter-row">
+            <div class="side">☆<br>收藏</div>
+            <div class="shutter"><i></i></div>
+            <div class="side">▤<br>记录</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>已换上</b>　真的换了款</div>
+    </div>
+
+    <!-- 2 正适合 -->
+    <div class="holder">
+      <div class="phone card-mode">
+        <div class="bg"></div>
+        <div class="hair"></div>
+        <div class="neck"></div>
+        <div class="head"></div>
+        <div class="panel">
+          <div class="rec-card">
+            <div class="rec-head">
+              <span class="rec-badge">按脸型匹配</span>
+              <span class="rec-shape">测得标准脸</span>
+              <span class="rec-close">×</span>
+            </div>
+            <div class="rec-main">
+              <span class="rec-title">「短碎发」正适合你的脸型</span>
+            </div>
+            <div class="rec-why-row">
+              <span class="rec-why">百搭款，几乎不会出错</span>
+              <span class="rec-next">换一款</span>
+            </div>
+            <div class="rec-sub">
+              <span class="rec-sub-key">肤色偏白，发色「亚麻棕」</span>
+              <span class="rec-sub-why">肤色偏白，配浅发色不容易显脏</span>
+            </div>
+            <div class="rec-shapes">
+              <span class="rec-shapes-label">判得不准？</span>
+              <span class="rec-chip">圆脸</span>
+              <span class="rec-chip is-on">标准</span>
+              <span class="rec-chip">长脸</span>
+            </div>
+          </div>
+          <div class="panel-head">
+            <div class="panel-title"><span class="style-current">短碎发</span><span class="style-tag">百搭减龄</span></div>
+            <div class="panel-actions"><span>微调</span><span>款式详情</span></div>
+          </div>
+          <div class="strip">
+            <div class="card"><div class="thumb"></div><span>寸头</span></div>
+            <div class="card on"><div class="thumb"></div><span>短碎发</span></div>
+            <div class="card"><div class="thumb"></div><span>波波头</span></div>
+            <div class="card"><div class="thumb"></div><span>背头</span></div>
+            <div class="card"><div class="thumb"></div><span>羊毛卷</span></div>
+          </div>
+          <div class="colors">
+            <div class="sw" style="background:#1b1a21"></div>
+            <div class="sw" style="background:#33231a"></div>
+            <div class="sw" style="background:#57381f"></div>
+            <div class="sw on" style="background:#7d6044"></div>
+            <div class="sw" style="background:#b3833c"></div>
+            <span class="color-label">亚麻棕</span>
+          </div>
+          <div class="shutter-row">
+            <div class="side">☆<br>收藏</div>
+            <div class="shutter"><i></i></div>
+            <div class="side">▤<br>记录</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>正适合</b>　推荐的就是当前款，不谎报「已换上」</div>
+    </div>
+
+    <!-- 3 更推荐 + 光线偏色 -->
+    <div class="holder">
+      <div class="phone card-mode">
+        <div class="bg"></div>
+        <div class="hair"></div>
+        <div class="neck"></div>
+        <div class="head"></div>
+        <div class="panel">
+          <div class="rec-card">
+            <div class="rec-head">
+              <span class="rec-badge">按脸型匹配</span>
+              <span class="rec-shape">测得偏长脸</span>
+              <span class="rec-close">×</span>
+            </div>
+            <div class="rec-main">
+              <span class="rec-title">更推荐「齐刘海短发」</span>
+              <span class="rec-use">换成这款</span>
+            </div>
+            <div class="rec-why-row">
+              <span class="rec-why">压掉一截额头，长脸立刻显短</span>
+              <span class="rec-next">换一款</span>
+            </div>
+            <div class="rec-sub">
+              <span class="rec-sub-key">肤色偏深，发色「自然黑」</span>
+              <span class="rec-sub-why">深发色和深肤色对比柔和，不刺眼</span>
+            </div>
+            <div class="rec-sub rec-sub-warn">画面光线偏色，这条发色仅供参考</div>
+            <div class="rec-shapes">
+              <span class="rec-shapes-label">脸型在边界上</span>
+              <span class="rec-chip">圆脸</span>
+              <span class="rec-chip">标准</span>
+              <span class="rec-chip is-on">长脸</span>
+            </div>
+          </div>
+          <div class="panel-head">
+            <div class="panel-title"><span class="style-current">大波浪</span><span class="style-tag">氛围感</span></div>
+            <div class="panel-actions"><span>微调</span><span>款式详情</span></div>
+          </div>
+          <div class="strip">
+            <div class="card"><div class="thumb"></div><span>寸头</span></div>
+            <div class="card"><div class="thumb"></div><span>短碎发</span></div>
+            <div class="card"><div class="thumb"></div><span>波波头</span></div>
+            <div class="card on"><div class="thumb"></div><span>大波浪</span></div>
+            <div class="card"><div class="thumb"></div><span>羊毛卷</span></div>
+          </div>
+          <div class="colors">
+            <div class="sw on" style="background:#1b1a21"></div>
+            <div class="sw" style="background:#33231a"></div>
+            <div class="sw" style="background:#57381f"></div>
+            <div class="sw" style="background:#7d6044"></div>
+            <div class="sw" style="background:#b3833c"></div>
+            <span class="color-label">自然黑</span>
+          </div>
+          <div class="shutter-row">
+            <div class="side">☆<br>收藏</div>
+            <div class="shutter"><i></i></div>
+            <div class="side">▤<br>记录</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>更推荐</b>　用户表过态，只给按钮不替他换</div>
+    </div>
+
+
+    <!-- 4 收起态 -->
+    <div class="holder">
+      <div class="phone">
+        <div class="bg"></div>
+        <div class="hair"></div>
+        <div class="neck"></div>
+        <div class="head"></div>
+        <div class="panel">
+          <div class="rec-mini">
+            <span class="rec-mini-badge">按脸型匹配</span>
+            <span class="rec-mini-text">偏圆脸，推荐「背头」<span class="rec-mini-color"> · 自然黑</span></span>
+            <span class="rec-mini-more">展开</span>
+          </div>
+          <div class="panel-head">
+            <div class="panel-title"><span class="style-current">背头</span><span class="style-tag">复古精英</span></div>
+            <div class="panel-actions"><span>微调</span><span>款式详情</span></div>
+          </div>
+          <div class="strip">
+            <div class="card"><div class="thumb"></div><span>寸头</span></div>
+            <div class="card"><div class="thumb"></div><span>短碎发</span></div>
+            <div class="card"><div class="thumb"></div><span>波波头</span></div>
+            <div class="card on"><div class="thumb"></div><span>背头</span></div>
+            <div class="card"><div class="thumb"></div><span>羊毛卷</span></div>
+          </div>
+          <div class="colors">
+            <div class="sw" style="background:#1b1a21"></div>
+            <div class="sw" style="background:#33231a"></div>
+            <div class="sw on" style="background:#57381f"></div>
+            <div class="sw" style="background:#7d6044"></div>
+            <div class="sw" style="background:#b3833c"></div>
+            <span class="color-label">栗棕</span>
+          </div>
+          <div class="shutter-row">
+            <div class="side">☆<br>收藏</div>
+            <div class="shutter"><i></i></div>
+            <div class="side">▤<br>记录</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>收起态</b>　7 秒后 / 一碰画面就收起，面板回到原高度</div>
+    </div>
+
+  </div>
+
+  <script>
+    window.addEventListener('load', function () {
+      const panels = Array.prototype.slice.call(document.querySelectorAll('.panel'))
+      const cards = Array.prototype.slice.call(document.querySelectorAll('.rec-card, .rec-mini'))
+      const phone = document.querySelector('.phone')
+      const scale = 375 / phone.getBoundingClientRect().width
+      const parts = panels.map(function (p, i) {
+        const h = p.getBoundingClientRect().height
+        return 'p' + i + '=' + Math.round(h * scale)
+      })
+      const c = cards.map(function (x) {
+        return 'c=' + Math.round(x.getBoundingClientRect().height * scale)
+      })
+      // 取景框：cx=屏宽/2, cy=屏高*0.40, h = 0.60*屏宽*1.22*2
+      const vh = 667
+      // 取景框：cy = 0.40 屏高，半高 = 0.30 屏宽 × 1.22
+      const frameBottom = Math.round(vh * 0.40 + 375 * 0.30 * 1.22)
+      const top = panels.map(function (p) {
+        return Math.round(vh - p.getBoundingClientRect().height * scale)
+      })
+      document.title = 'PANEL ' + parts.join(' ') + ' | CARD ' + c.join(' ') +
+        ' | PANELTOP ' + top.join(' ') + ' | FRAMEBOTTOM ' + frameBottom
+    })
+  </script>
+  <!-- 只看某一态：rec-preview.html#2 → 只留第 3 台手机。
+       量高度的那段脚本在它之前跑，所以 title 里的数字不受影响。 -->
+  <script>
+    if (location.hash) {
+      var n = parseInt(location.hash.slice(1), 10)
+      Array.prototype.forEach.call(document.querySelectorAll('.phone'), function (p, i) {
+        if (i !== n) p.style.display = 'none'
+      })
+    }
+  </script>
+</body>
+</html>

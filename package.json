@@ -1,0 +1,8 @@
+{
+  "name": "ar-hairstyle-miniprogram",
+  "version": "1.0.0",
+  "description": "理发店AR虚拟试发型试发色微信小程序",
+  "dependencies": {
+    "@tencent-ai/workbuddy-cloud-sdk": "dev"
+  }
+}

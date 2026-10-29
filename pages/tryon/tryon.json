@@ -1,0 +1,11 @@
+{
+  "navigationStyle": "custom",
+  "disableScroll": true,
+  "backgroundColor": "#000000",
+  "backgroundColorTop": "#000000",
+  "backgroundColorBottom": "#000000",
+  "backgroundTextStyle": "light",
+  "usingComponents": {
+    "privacy-gate": "/components/privacy-gate/index"
+  }
+}

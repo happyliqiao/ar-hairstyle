@@ -1,0 +1,1022 @@
+.stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+}
+
+/* ---------- 摄像头 ---------- */
+.cam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.cam-off {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 35%, #1d1d2b 0%, #0b0b12 70%);
+}
+
+.cam-off-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 72rpx;
+  text-align: center;
+}
+
+.cam-off-icon {
+  font-size: 96rpx;
+  color: rgba(224, 168, 111, 0.45);
+  margin-bottom: 24rpx;
+}
+
+.cam-off-title {
+  font-size: 34rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+  margin-bottom: 16rpx;
+}
+
+.cam-off-desc {
+  font-size: 25rpx;
+  color: #9b9aa8;
+  line-height: 1.7;
+  margin-bottom: 48rpx;
+}
+
+.cam-off-btn {
+  width: 380rpx;
+}
+
+/* 开发者工具模拟器：不放占位按钮，让参考头型与发型可见 */
+.cam-off-devtools {
+  align-items: flex-start;
+  padding-top: 210rpx;
+  background: radial-gradient(circle at 50% 42%, #1e1e2c 0%, #0b0b12 72%);
+}
+
+.dt-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10rpx;
+  padding: 0 60rpx;
+  text-align: center;
+}
+
+.dt-hint-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: rgba(224, 168, 111, 0.85);
+  letter-spacing: 2rpx;
+}
+
+.dt-hint-desc {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.6;
+}
+
+/* ---------- 叠加画布 ---------- */
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}
+
+/* 模拟器没有画面可叠，画布不再接收触摸，避免拖动一个空画面 */
+.overlay.is-off {
+  pointer-events: none;
+}
+
+.fade-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 320rpx;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.62) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+.fade-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 420rpx;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.86) 0%, rgba(0, 0, 0, 0) 100%);
+}
+
+/* ---------- 顶部栏 ---------- */
+.topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+}
+
+.topbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16rpx 28rpx 0 28rpx;
+  gap: 20rpx;
+}
+
+.round-btn {
+  /* 72rpx(36pt) 低于 44pt 建议值，返回/切摄像头是高频操作，
+     放大到 88rpx。topbar-row 是 space-between 布局，
+     中间的状态胶囊自适应，不会因此挤坏。 */
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  background: rgba(20, 20, 30, 0.55);
+  border: 2rpx solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(20rpx);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 34rpx;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.round-btn.back {
+  font-size: 46rpx;
+  padding-bottom: 6rpx;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  height: 60rpx;
+  padding: 0 26rpx;
+  border-radius: 30rpx;
+  background: rgba(20, 20, 30, 0.55);
+  border: 2rpx solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20rpx);
+  font-size: 23rpx;
+  color: rgba(255, 255, 255, 0.72);
+  max-width: 380rpx;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status-pill.is-on {
+  color: var(--gold);
+  border-color: rgba(224, 168, 111, 0.45);
+}
+
+.pulse {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  flex-shrink: 0;
+}
+
+.status-pill.is-on .pulse {
+  background: var(--gold);
+  box-shadow: 0 0 12rpx rgba(224, 168, 111, 0.9);
+  animation: pulseAnim 1.8s infinite ease-in-out;
+}
+
+@keyframes pulseAnim {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+
+/* ---------- 取景引导框 ---------- */
+/* 位置与尺寸由 JS 用 px 内联给出（face-fit.guideFrame），
+   这里只负责长相。transform 负责把「左上角坐标」换算成「中心坐标」，
+   这样 JS 传的是中心点，CSS 不用再算一遍。 */
+.face-guide {
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  /* 淡出而不是直接删节点：删节点是「啪」地消失，用户会以为框坏了；
+     淡出 0.4 秒读起来是「它自己退场了」。 */
+  transition: opacity 0.4s ease;
+}
+
+/* 对齐满 3 秒后淡出。注意仍然保留节点：一偏离要能立刻淡回来，
+   重新创建节点会有一帧空白。 */
+.face-guide.is-hidden {
+  opacity: 0;
+}
+
+/* 瓜子形，不是正椭圆。
+ *
+ * 正椭圆上下对称，视觉上像一颗蛋；真实人脸是「额头宽圆、下巴收窄」。
+ * 用非对称的圆角比例做出上宽下窄：水平方向上面两角 52%、下面两角 46%，
+ * 垂直方向上面两角 44%、下面两角 58%。
+ * 虚线而不是实线，是为了表明它是「参考」不是「结果」。 */
+.fg-ring {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border: 3rpx dashed rgba(255, 255, 255, 0.5);
+  border-radius: 52% 52% 46% 46% / 46% 46% 54% 54%;
+  /* 浅色背景下白虚线会彻底消失（白墙、窗户、浅色衣服）。
+     外面补一圈 1px 暗描边，等于「白线 + 暗边」，
+     深底和亮底都看得见。不能用纯白或纯黑单色。 */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+  transition: border-color 0.18s ease, opacity 0.3s ease;
+}
+
+/* 检测到脸但还没对齐：换成金色实线，告诉用户「我看到你了，再挪一下」 */
+.face-guide.is-aligning .fg-ring {
+  border-style: solid;
+  border-color: rgba(224, 168, 111, 0.9);
+}
+
+/* 已对齐：框淡下去。留着是为了用户一动就知道自己又偏了，
+   但不该一直抢脸部的注意力。 */
+.face-guide.is-locked .fg-ring {
+  border-style: solid;
+  border-color: rgba(224, 168, 111, 0.34);
+}
+
+/* 方向提示挂在框下方。黑底白字，因为背后是摄像头画面，
+   深浅完全不可控，纯白字在浅色墙面前会看不清。 */
+.fg-hint {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  margin-top: 18rpx;
+  padding: 12rpx 26rpx;
+  border-radius: 30rpx;
+  background: rgba(16, 16, 24, 0.78);
+  color: #f4d7b4;
+  font-size: 25rpx;
+  white-space: nowrap;
+}
+
+/* ---------- 识脸不可用时的降级入口 ---------- */
+/* 放在画面中上部：下面是发型会出现的区域，卡片压在这里不会挡住用户
+   自己的脸，也不会和底部发型条抢位置。 */
+.locate-card {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: 520rpx;
+  padding: 34rpx 30rpx 30rpx 30rpx;
+  border-radius: 28rpx;
+  background: rgba(16, 16, 24, 0.86);
+  border: 2rpx solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(24rpx);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.locate-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+  text-align: center;
+}
+
+.locate-desc {
+  font-size: 23rpx;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+}
+
+.locate-btn {
+  margin-top: 10rpx;
+  min-width: 220rpx;
+  height: 68rpx;
+  line-height: 68rpx;
+  text-align: center;
+  border-radius: 34rpx;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #1a1410;
+  background: linear-gradient(135deg, #e0a86f, #c98b4f);
+}
+
+/* ---------- 自动匹配卡片 ----------
+ * 卡片是「系统替用户做了决定」的唯一凭证，所以它不能像广告：
+ * 底色压到接近面板色，只有徽标用金色点一下，避免抢掉画面。
+ * 关掉按钮必须一直在右上角 —— 一个会自动改东西的功能，
+ * 没有一键收起的出口是不敢让人用的。
+ */
+.rec-card {
+  margin: 0 28rpx 18rpx 28rpx;
+  padding: 20rpx 24rpx 18rpx 24rpx;
+  border-radius: 22rpx;
+  background: rgba(26, 24, 30, 0.92);
+  border: 2rpx solid rgba(224, 168, 111, 0.26);
+}
+
+.rec-head {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-bottom: 10rpx;
+}
+
+.rec-badge {
+  font-size: 20rpx;
+  color: #1a1613;
+  background: #e0a86f;
+  padding: 3rpx 12rpx;
+  border-radius: 999rpx;
+}
+
+.rec-shape {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.rec-close {
+  margin-left: auto;
+  font-size: 32rpx;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.42);
+  padding: 0 4rpx 8rpx 20rpx;
+}
+
+.rec-main {
+  display: flex;
+  align-items: baseline;
+  gap: 18rpx;
+}
+
+.rec-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+}
+
+.rec-use {
+  font-size: 22rpx;
+  color: #e0a86f;
+  padding: 4rpx 0;
+}
+
+/* 理由 + 「换一款」同一行。
+   放标题行的话，标题（「更推荐「齐刘海短发」」）+「换成这款」+「换一款」
+   在 375pt 上正好换行，卡片一高 23pt 就把面板重新顶到脸上（实测 313→336）。
+   理由行本来就有一整行空白，右边挂一个小胶囊不占高度。 */
+.rec-why-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14rpx;
+  margin-top: 6rpx;
+}
+
+.rec-why {
+  display: block;
+  flex: 1;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* 小胶囊，和底部的脸型 chip 同一套语言。
+   只在这里用，所以不做独立的基础样式，免得两处 padding/border 互相覆盖。 */
+.rec-why-row .rec-next {
+  flex-shrink: 0;
+  font-size: 20rpx;
+  color: #e0a86f;
+  padding: 0 12rpx;
+  border: 2rpx solid rgba(224, 168, 111, 0.34);
+  border-radius: 999rpx;
+  line-height: 1.5;
+}
+
+.rec-sub {
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.rec-sub-why {
+  display: block;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.rec-sub-warn {
+  color: rgba(224, 168, 111, 0.72);
+}
+
+/* 两行分开：发色名一行、理由一行。
+   挤在一行时中文会从中间断字（「…不抢脸 / 色」），读起来像排版坏了。 */
+.rec-sub-key {
+  display: block;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.rec-shapes {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.rec-shapes-label {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.3);
+  margin-right: 2rpx;
+}
+
+.rec-chip {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.55);
+  padding: 5rpx 18rpx;
+  border-radius: 999rpx;
+  border: 2rpx solid rgba(255, 255, 255, 0.16);
+}
+
+.rec-chip.is-on {
+  color: #1a1613;
+  background: #e0a86f;
+  border-color: #e0a86f;
+}
+
+/* 收起态一行条：高度 40rpx 左右，面板基本回到原高度 */
+.rec-mini {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin: 0 28rpx 12rpx 28rpx;
+  padding: 8rpx 18rpx;
+  border-radius: 999rpx;
+  background: rgba(26, 24, 30, 0.86);
+  border: 2rpx solid rgba(224, 168, 111, 0.2);
+}
+
+.rec-mini-badge {
+  font-size: 19rpx;
+  color: #1a1613;
+  background: rgba(224, 168, 111, 0.9);
+  padding: 2rpx 10rpx;
+  border-radius: 999rpx;
+}
+
+.rec-mini-text {
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.6);
+  flex: 1;
+  /* 小条必须永远是一行。加了发色之后总长会顶到 375pt 的边，
+     换行就把这一条撑成两行，面板高度跟着变，又去压取景框。 */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rec-mini-color {
+  color: #e0a86f;
+}
+
+.rec-mini-more {
+  font-size: 21rpx;
+  color: #e0a86f;
+}
+
+/* ---------- 微调面板 ---------- */
+.adjust {
+  margin: 20rpx 28rpx 0 28rpx;
+  padding: 28rpx 30rpx 22rpx 30rpx;
+  border-radius: 24rpx;
+  background: rgba(16, 16, 24, 0.82);
+  border: 2rpx solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(24rpx);
+}
+
+.adjust-row {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  margin-bottom: 6rpx;
+}
+
+.adjust-label {
+  width: 68rpx;
+  font-size: 23rpx;
+  color: rgba(255, 255, 255, 0.6);
+  flex-shrink: 0;
+}
+
+.adjust-slider {
+  flex: 1;
+  margin: 0;
+}
+
+.adjust-tip {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.45);
+  text-align: center;
+}
+
+.adjust-row-switch {
+  margin-top: 6rpx;
+  margin-bottom: 10rpx;
+}
+
+.adjust-tip-inline {
+  margin-top: 0;
+  text-align: left;
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.switch-track {
+  /* 高度 40rpx(20pt) 太薄，拇指很难点中。放大到 48rpx 高、88rpx 宽 */
+  width: 88rpx;
+  height: 48rpx;
+  border-radius: 24rpx;
+  background: rgba(255, 255, 255, 0.16);
+  padding: 4rpx;
+  display: flex;
+  align-items: center;
+  transition: background 0.2s;
+  box-sizing: border-box;
+}
+
+.switch-track.on {
+  background: rgba(224, 168, 111, 0.75);
+}
+
+.switch-knob {
+  width: 38rpx;
+  height: 38rpx;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+
+/* 位移 = 轨道内宽 - 滑块宽 = (88 - 4*2) - 38 = 42rpx */
+.switch-track.on .switch-knob {
+  transform: translateX(42rpx);
+}
+
+/* ---------- 底部面板 ---------- */
+.panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding-top: 20rpx;
+  background: linear-gradient(to top, rgba(8, 8, 14, 0.97) 30%, rgba(8, 8, 14, 0.72) 75%, rgba(8, 8, 14, 0) 100%);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32rpx 20rpx 32rpx;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.style-current {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #f2f0ee;
+}
+
+.style-tag {
+  font-size: 20rpx;
+  color: var(--gold);
+  background: rgba(224, 168, 111, 0.14);
+  padding: 4rpx 14rpx;
+  border-radius: 16rpx;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 24rpx;
+}
+
+.mini-btn {
+  font-size: 23rpx;
+  color: rgba(255, 255, 255, 0.55);
+  padding: 8rpx 0;
+}
+
+/* ---------- 发型条 ---------- */
+.strip {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.strip-inner {
+  display: inline-flex;
+  padding: 0 32rpx;
+  gap: 18rpx;
+}
+
+.style-card {
+  /* 124rpx 时「齐刘海短发」5 字 x 21rpx 字号 ≈ 105rpx，只剩 19rpx 余量。
+     不同机型中文字形宽度系数 0.95~1.05，一旦换行会把这一项撑高，
+     横向滚动列表里出现高度不一致的卡片，视觉上明显跳动。
+     放宽到 134rpx，并用 nowrap 兜底禁止换行。 */
+  width: 134rpx;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10rpx 0 14rpx 0;
+  border-radius: 20rpx;
+  border: 2rpx solid transparent;
+  transition: all 0.2s;
+}
+
+.style-card.is-active {
+  background: rgba(224, 168, 111, 0.12);
+  border-color: rgba(224, 168, 111, 0.55);
+}
+
+.style-thumb {
+  width: 100rpx;
+  height: 120rpx;
+}
+
+.style-name {
+  margin-top: 8rpx;
+  font-size: 21rpx;
+  color: rgba(255, 255, 255, 0.62);
+  /* 禁止换行：卡片在横向滚动列表里，高度必须一致 */
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.style-card.is-active .style-name {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+/* ---------- 发色条 ---------- */
+.color-bar {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 22rpx 32rpx 8rpx 32rpx;
+}
+
+.color-scroll {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.color-inner {
+  display: inline-flex;
+  gap: 20rpx;
+  padding: 4rpx 0;
+}
+
+.color-swatch {
+  /* 56rpx(28pt) 的色点比 Apple 建议的 44pt 小一半，12 个点密集排列时
+     很容易点错发色。视觉放大到 64rpx，再用 ::after 把热区扩到 78rpx。
+     上限受 gap 约束：64 + 20(gap) = 84rpx，热区必须小于它，
+     否则相邻色点的热区会重叠，点击落到后渲染的那个上。 */
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 50%;
+  padding: 4rpx;
+  border: 2rpx solid transparent;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.color-swatch::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 78rpx;
+  height: 78rpx;
+}
+
+.color-swatch.is-active {
+  border-color: var(--gold);
+  box-shadow: 0 0 16rpx rgba(224, 168, 111, 0.5);
+}
+
+.color-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2rpx solid rgba(255, 255, 255, 0.14);
+}
+
+.color-label {
+  font-size: 22rpx;
+  color: rgba(255, 255, 255, 0.62);
+  width: 96rpx;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ---------- 快门 ---------- */
+.shutter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26rpx 56rpx 12rpx 56rpx;
+}
+
+.shutter-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6rpx;
+  width: 110rpx;
+}
+
+.shutter-side-icon {
+  font-size: 34rpx;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1;
+}
+
+.shutter-side-text {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.shutter {
+  position: relative;
+  width: 132rpx;
+  height: 132rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shutter-ring {
+  position: absolute;
+  width: 132rpx;
+  height: 132rpx;
+  border-radius: 50%;
+  border: 4rpx solid rgba(255, 255, 255, 0.85);
+}
+
+.shutter-core {
+  width: 104rpx;
+  height: 104rpx;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 55%, var(--gold-deep) 100%);
+  transition: transform 0.14s ease;
+}
+
+.shutter:active .shutter-core {
+  transform: scale(0.9);
+}
+
+.shutter.is-busy .shutter-core {
+  opacity: 0.5;
+}
+
+/* ---------- 离屏画布 ---------- */
+.compose-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ---------- 弹层 ---------- */
+.sheet-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  animation: mask-in 0.2s ease-out;
+}
+
+@keyframes mask-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.sheet {
+  width: 100%;
+  /* 发型库是数据驱动的：运营后加一款描述更长的发型时，
+     没有上限会把整块弹层顶出屏幕，用户看不到下面的按钮。
+     限高 + 描述区自己滚，比让内容溢出安全。 */
+  max-height: 82vh;
+  box-sizing: border-box;
+  background: #16161f;
+  border-radius: 36rpx 36rpx 0 0;
+  padding: 20rpx 40rpx calc(40rpx + env(safe-area-inset-bottom)) 40rpx;
+  border-top: 2rpx solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  animation: sheet-up 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.sheet-handle {
+  width: 72rpx;
+  height: 8rpx;
+  border-radius: 4rpx;
+  background: rgba(255, 255, 255, 0.18);
+  margin: 0 auto 32rpx auto;
+}
+
+.sheet-title {
+  font-size: 42rpx;
+  font-weight: 700;
+  color: #f2f0ee;
+}
+
+.sheet-en {
+  font-size: 22rpx;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 2rpx;
+  text-transform: uppercase;
+  margin-top: 6rpx;
+}
+
+.sheet-tags {
+  display: flex;
+  gap: 14rpx;
+  margin: 22rpx 0 24rpx 0;
+}
+
+.sheet-desc {
+  font-size: 27rpx;
+  color: #a5a4b2;
+  line-height: 1.75;
+}
+
+/* 描述区滚动容器：flex:1 让它在限高的 sheet 里吃掉剩余空间，
+   min-height:0 是 flex 子项能滚动的必要条件（否则会被内容撑开） */
+.sheet-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.sheet-meta {
+  display: flex;
+  gap: 60rpx;
+  margin-bottom: 36rpx;
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+}
+
+.meta-value {
+  font-size: 27rpx;
+  color: #f2f0ee;
+  font-weight: 600;
+}
+
+.sheet-btn {
+  width: 100%;
+}
+
+/* ---------- Toast ---------- */
+/* ============ 首次使用引导 ============ */
+.guide-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 56rpx;
+  animation: mask-in 0.2s ease-out;
+}
+
+.guide-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: #16161f;
+  border: 2rpx solid rgba(255, 255, 255, 0.1);
+  border-radius: 32rpx;
+  padding: 44rpx 40rpx 36rpx;
+  animation: guide-in 0.24s ease-out;
+}
+
+.guide-title {
+  display: block;
+  font-size: 34rpx;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 30rpx;
+}
+
+.guide-row {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 22rpx;
+}
+
+/* 序号用固定宽度的圆点，三条文案左边缘才能对齐。
+   直接给 text 加 padding 会在不同机型上差几个像素。 */
+.guide-num {
+  flex: 0 0 auto;
+  width: 40rpx;
+  height: 40rpx;
+  line-height: 40rpx;
+  text-align: center;
+  border-radius: 20rpx;
+  background: var(--gold-soft);
+  color: var(--gold);
+  font-size: 22rpx;
+  font-weight: 600;
+  margin-right: 18rpx;
+  margin-top: 4rpx;
+}
+
+.guide-text {
+  flex: 1;
+  font-size: 26rpx;
+  line-height: 40rpx;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.guide-btn {
+  margin-top: 18rpx;
+}
+
+@keyframes guide-in {
+  from { opacity: 0; transform: translateY(20rpx) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 46%;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 20rpx 36rpx;
+  border-radius: 40rpx;
+  background: rgba(20, 20, 28, 0.94);
+  border: 2rpx solid rgba(255, 255, 255, 0.14);
+  color: #f2f0ee;
+  font-size: 25rpx;
+  /* 不锁 nowrap：文案最长有「已保存，清理了最早的 N 条旧记录」13 字，
+     25rpx 字号下约 325rpx，超过 375pt 屏的 80vw(300rpx)，
+     锁死单行会被屏幕边缘裁掉。允许换行 + 居中，最多两行。 */
+  max-width: 80vw;
+  text-align: center;
+  line-height: 1.5;
+}

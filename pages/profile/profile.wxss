@@ -1,0 +1,249 @@
+.head {
+  padding-bottom: 8rpx;
+}
+
+/* 个人信息 */
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 28rpx;
+  padding: 16rpx 0 36rpx 0;
+}
+
+.avatar-btn {
+  width: 136rpx;
+  height: 136rpx;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  overflow: hidden;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.avatar-btn::after {
+  border: none;
+}
+
+.avatar-img {
+  width: 136rpx;
+  height: 136rpx;
+  border-radius: 50%;
+}
+
+.avatar-empty {
+  width: 136rpx;
+  height: 136rpx;
+  border-radius: 50%;
+  background: linear-gradient(150deg, #232331 0%, #16161f 100%);
+  border: 2rpx dashed rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.avatar-empty-text {
+  font-size: 44rpx;
+  color: rgba(255, 255, 255, 0.32);
+  line-height: 1;
+}
+
+.profile-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+}
+
+.nickname-input {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #f2f0ee;
+  height: 56rpx;
+  line-height: 56rpx;
+}
+
+.nickname-ph {
+  color: rgba(255, 255, 255, 0.45);
+  font-weight: 500;
+  font-size: 34rpx;
+}
+
+.profile-sub {
+  font-size: 22rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* 统计 */
+.stats {
+  display: flex;
+  align-items: center;
+  padding: 28rpx 0;
+  border-radius: 24rpx;
+  background: var(--surface);
+  border: 2rpx solid rgba(255, 255, 255, 0.06);
+}
+
+.stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6rpx;
+}
+
+.stat-num {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #f2f0ee;
+  line-height: 1.1;
+}
+
+.stat-label {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.stat-div {
+  width: 2rpx;
+  height: 48rpx;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 区块 */
+.block {
+  margin-top: 44rpx;
+}
+
+.block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 22rpx;
+}
+
+.block-more {
+  font-size: 23rpx;
+  color: var(--gold);
+}
+
+/* 收藏 */
+.fav-strip {
+  width: calc(100% + 64rpx);
+  margin: 0 -32rpx;
+  white-space: nowrap;
+}
+
+.fav-inner {
+  display: inline-flex;
+  gap: 18rpx;
+  padding: 0 32rpx;
+}
+
+.fav-card {
+  width: 148rpx;
+  flex-shrink: 0;
+  padding: 16rpx 0 14rpx 0;
+  border-radius: 20rpx;
+  background: var(--surface);
+  border: 2rpx solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.fav-thumb {
+  width: 92rpx;
+  height: 110rpx;
+}
+
+.fav-name {
+  font-size: 21rpx;
+  color: #b9b7c6;
+}
+
+.fav-empty {
+  padding: 36rpx 28rpx;
+  border-radius: 22rpx;
+  background: var(--surface);
+  border: 2rpx dashed rgba(255, 255, 255, 0.1);
+  font-size: 23rpx;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* 设置行 */
+.row-list {
+  border-radius: 24rpx;
+  background: var(--surface);
+  border: 2rpx solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 30rpx 28rpx;
+  border-bottom: 2rpx solid rgba(255, 255, 255, 0.05);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:active {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.row-label {
+  font-size: 27rpx;
+  color: #e6e4ee;
+}
+
+.row-value {
+  font-size: 23rpx;
+  color: rgba(255, 255, 255, 0.48);
+}
+
+.row-value.is-on {
+  color: #6fcf97;
+}
+
+.row-danger .row-label {
+  color: rgba(233, 69, 96, 1);
+}
+
+/* 页脚 */
+.footer {
+  padding: 56rpx 8rpx 32rpx 8rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10rpx;
+  text-align: center;
+}
+
+.footer-line {
+  font-size: 20rpx;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 1rpx;
+}
+
+.footer-line.dim {
+  color: rgba(255, 255, 255, 0.36);
+  line-height: 1.6;
+}
+
+/* 微信原生 tabBar 已自动避让 iPhone 底部横条，
+   app.wxss 里 .safe-bottom 的 env(safe-area-inset-bottom) 在这里
+   会变成第二层留白，iPhone X 以上多出约 34px。
+   tabBar 页只保留一个小间距就够。 */
+.safe-bottom {
+  padding-bottom: 24rpx;
+}
