@@ -252,6 +252,11 @@ d2c.data.faceFound = true
 d2c.trackedBox = { x: 90, y: 120, w: 200, h: 240 }
 d2c.trackedAngle = 0
 d2c.trackedLostAt = 0
+// 这个实例没跑 onLoad，dragDX/dragDY 会是 undefined，computeBox 会算出 NaN 框。
+// 页面真机上 onLoad 一定先于 onReady，这两个值必然是 0；这里补齐模拟状态，
+// 否则「宽限期内还跟着脸」会建立在一个 NaN 几何上假通过。
+d2c.dragDX = 0
+d2c.dragDY = 0
 d2c.startTracking()
 ck('2b.1 startTracking 注册了 removeAnchors 回调', typeof state.handlers.removeAnchors === 'function')
 

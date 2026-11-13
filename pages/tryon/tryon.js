@@ -47,6 +47,12 @@ const SKIN_TIMEOUT_MS = 1600
 const SKIN_MAX_TRIES = 3
 const SKIN_RETRY_MS = 2500
 /**
+ * 肤色结论撞上拍照时最多让几次。
+ * 快门看门狗 20 秒才复位，若拍摄链路真的卡住，原来会每 500ms
+ * 递归挂一次定时器、永远不收尾。8 次（4 秒）足够覆盖一次正常拍摄。
+ */
+const SKIN_APPLY_MAX_TRIES = 8
+/**
  * 推荐卡片展开多久后自动收起。
  *
  * 卡片是贴在底部面板上方的，展开时会把面板顶高 ~150pt，
@@ -350,6 +356,24 @@ Page({
     this.ensureCamera()
   },
 
+  /**
+   * 屏幕尺寸变了：折叠屏展开 / 收起、平板分屏、微信窗口模式、横竖屏切换。
+   *
+   * 取景框和画布的 px 几何是在 initCanvas 里按当时的宽高算一次的。
+   * 不重算的话，展开折叠屏后框还停在旧位置：一半在屏外，
+   * judgeAlign 继续拿旧框判距离，用户怎么挪脸都进不了「已对齐」，
+   * 自动匹配（核心功能）在这台设备上就再也不会触发。
+   *
+   * 这里只重算画布与框，不动摄像头帧尺寸：frameSize 是相机给的，
+   * 与窗口比例无关，重新探测反而会和肤色采样抢 onCameraFrame。
+   */
+  onResize() {
+    if (!this._alive) return
+    // 展开成宽屏时面板更矮，展开着的推荐卡会压到脸上，先收成小条
+    this.collapseRec()
+    this.initCanvas()
+  },
+
   onUnload() {
     // 标记页面已销毁。所有延迟回调（定时器、VKSession.start 回调、
     // canvasToTempFilePath 回调）在执行前都要看这个标志，
@@ -442,6 +466,11 @@ Page({
   },
 
   onHide() {
+    // 切走时把展开的推荐卡收成小条、并停掉它的倒计时。
+    // 后台 JS 会被系统挂起，7 秒定时器不一定按时跑；用户回来时
+    // 若卡片还摊开着，正好压住重新取景的下巴那一段。
+    this.collapseRec()
+    this.clearRecCollapse()
     // 页面切走时停止识脸，省电；相机由框架自行挂起
     this.stopTracking()
     this.stopFrameProbe()
@@ -674,6 +703,10 @@ Page({
 
       canvas.width = res[0].width * dpr
       canvas.height = res[0].height * dpr
+      // onResize 会重新走这里。虽然标准 canvas 改 width 会重置状态，
+      // 小程序 2d canvas 的部分实现不会 —— 不显式归零的话，
+      // 每展开一次折叠屏就多叠一层 scale，画面成倍放大。
+      if (ctx.setTransform) ctx.setTransform(1, 0, 0, 1, 0, 0)
       ctx.scale(dpr, dpr)
 
       self.canvas = canvas
@@ -827,6 +860,9 @@ Page({
     // 否则它们还会持续向断流的相机要帧，发热并刷错误日志。
     this.setKeepOn(false)
     this.teardown()
+    // 相机都没了，卡片却还写着「已换上「X」」，是最明显的一句谎。
+    // 收成小条保留结论，但不再以完整卡片挂在黑屏上。
+    this.collapseRec()
 
     // 隐私协议被拦。这时说「相机启动失败」是误导 ——
     // 用户会去系统设置里翻相机权限，那里明明是开着的，
@@ -1330,10 +1366,14 @@ Page({
     // 先清空再判断：没有可信位置时必须把上一帧的发型擦掉，
     // 否则失脸后画布上会残留一顶悬空的假发。
     ctx.clearRect(0, 0, this.cw, this.ch)
-    if (!box) {
+    if (!box || !(box.w > 0) || !isFinite(box.x + box.y + box.w + box.h)) {
       // 同时把 lastBox 清掉。它只在有框的时候被赋值，
       // 如果这里留着上一次的位置，拍照会拿一个「人脸早就走了」的
       // 旧坐标去合成 —— 照片上出现一顶漂在背景里的发型。
+      //
+      // 有限性校验是为了脏微调值：滑块回传 NaN、或校准参数被写坏时，
+      // computeBox 会算出 NaN 几何；交给 drawHair 轻则画不出东西，
+      // 重则在 Path2D 里死循环。宁可这一帧空着，也不能把画布卡死。
       this.lastBox = null
       return
     }
@@ -1511,6 +1551,11 @@ Page({
     this._recPending = false
     this._skinStarted = false
     this._skinTries = 0
+    // 脸颊采样框是「上一台摄像头看到的那张脸」的坐标。
+    // 不清掉的话，切回前置后新一轮肤色采样可能直接拿旧框去读像素，
+    // 把上一张脸/上一处光线的颜色算到新画面上。
+    this._faceRect = null
+    this._skinApplyTries = 0
     if (this.data.rec && (this.data.rec.show || this.data.rec.declined)) {
       this.setData({
         rec: Object.assign({}, this.data.rec, {
@@ -1959,6 +2004,14 @@ Page({
     // 采样是异步的，很可能正好落在按快门之后那几百毫秒里。
     // 这时候改发色会让照片和预览对不上，推到拍完再应用。
     if (this.data.shooting) {
+      this._skinApplyTries = (this._skinApplyTries || 0) + 1
+      if (this._skinApplyTries > SKIN_APPLY_MAX_TRIES) {
+        // 拍摄链路真的卡住时不能无限递归挂定时器。
+        // 放弃这一次发色结论，把「正在测肤色…」收掉，不装死。
+        this._skinApplyTries = 0
+        this.setData({ rec: Object.assign({}, this.data.rec, { skinBusy: false }) })
+        return
+      }
       const self = this
       if (this._skinApplyTimer) clearTimeout(this._skinApplyTimer)
       this._skinApplyTimer = setTimeout(function () {
@@ -1968,6 +2021,7 @@ Page({
       }, 500)
       return
     }
+    this._skinApplyTries = 0
 
     const base = Object.assign({}, this.data.rec, { skinBusy: false })
     if (!skin) {
@@ -2319,6 +2373,22 @@ Page({
     // 存下一张「只有自拍、没有发型」的普通照片 —— 用户以为自己拍到了
     // 试戴效果，翻记录才发现是原图，而且已经写进相册和本地记录了。
     // 与其产出一个假结果，不如当场说清楚下一步该做什么。
+    // 失脸后的 2.5 秒宽限期内，trackedBox / lastBox 都还留着上一帧的框，
+    // computeBox 会照常把它画出来（这是防止发型跳动的刻意设计）。
+    // 但快门不能跟着宽限：人已经把脸拿开了，相机会拍到真实背景，
+    // 合成却在这张空背景上贴一顶发型 —— 用户翻记录才发现是废片。
+    //
+    // 条件只看「这一场确实丢过脸、且还没重新识到」：
+    // removeAnchors 打 trackedLostAt，onFaceAnchor 把它清 0。
+    // 不能写成「只要 faceFound=false 就拦」—— 手动定位、相机刚起来
+    // 还没收到第一个 anchor、以及部分基础库不回 faceFound 的会话，
+    // 都会被误伤，用户明明看着画面里有发型却按不动快门。
+    // 手动定位（manualOn）本来就不依赖识脸，永远放行。
+    if (!this.data.faceFound && !this.data.manualOn && this.trackedLostAt) {
+      this.showToast('把脸放进虚线框再按快门')
+      return
+    }
+
     const shotBox = this.lastBox || this.computeBox()
     if (!shotBox) {
       this.showToast(this.data.arUnavailable ? '先点「手动定位」，再按快门' : '把脸放进虚线框再按快门')
@@ -2568,6 +2638,8 @@ Page({
     const self = this
     // 用户可能已经退出，页面实例不在了
     if (!this._alive) return
+    // 照片已经出来，20 秒看门狗不用再挂着（成功路径原来一直没解）
+    this.disarmShootWatchdog()
     // 合成结束，解除冻结，识脸继续实时跟踪
     this.unfreezeBox()
     const captureLook = this._captureLook || {

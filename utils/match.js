@@ -407,6 +407,14 @@ function sampleSkinPixels(data, width, height, rect) {
   // 严格规则对深肤色偏严（R>95 这条在暗光下直接筛空）。
   // 严格像素不够时放宽一次再算，避免「深肤色用户永远测不出肤色」。
   if (n < 40 && loose >= 40) {
+    // 放宽规则认的是「偏红 + 有点饱和度」，红墙、木桌、口红、
+    // 手掌都符合。暗光下严格规则筛空时就会走这一路。
+    // 两块脸颊都采到像素、颜色却差得很远，说明有一块根本不是脸：
+    // 把两块平均成一个肤色，等于凭空编一个结论，还会据此自动换发色。
+    const per = [
+      { n: 0, r: 0, g: 0, b: 0 },
+      { n: 0, r: 0, g: 0, b: 0 }
+    ]
     for (let p = 0; p < patches.length; p++) {
       const pt = patches[p]
       for (let gy = 0; gy < GRID; gy++) {
@@ -421,9 +429,21 @@ function sampleSkinPixels(data, width, height, rect) {
           const r = u8[i]
           const g = u8[i + 1]
           const b = u8[i + 2]
-          if (isSkinLoose(r, g, b)) { sr += r; sg += g; sb += b; n++ }
+          if (isSkinLoose(r, g, b)) {
+            sr += r; sg += g; sb += b; n++
+            const a = per[p]
+            a.n++; a.r += r; a.g += g; a.b += b
+          }
         }
       }
+    }
+    // 只有一块有像素时不能判（侧脸、手挡住一边都很常见），
+    // 那正是 E5 这类场景，照常给结论。
+    if (per[0].n >= 20 && per[1].n >= 20) {
+      const dr = Math.abs(per[0].r / per[0].n - per[1].r / per[1].n)
+      const dg = Math.abs(per[0].g / per[0].n - per[1].g / per[1].n)
+      const db = Math.abs(per[0].b / per[0].n - per[1].b / per[1].n)
+      if (Math.max(dr, dg, db) > 55) return null
     }
   }
 

@@ -64,6 +64,21 @@ const FACE_W_MAX_RATIO = 0.58
 const GUIDE_RX_RATIO = 0.30   // 框半宽 / 屏宽 → 框宽 = 0.60 屏宽
 const GUIDE_CY_RATIO = 0.40   // 框心 y / 屏高（偏上，给底部操作区留位置）
 const GUIDE_ASPECT = 1.22     // 半高 / 半宽，接近「脸 + 头顶头发」的轮廓比例
+/**
+ * 框高最多占屏高多少。
+ *
+ * 只按屏宽算框，在竖屏手机上没问题（375×667 时框高约 41%），
+ * 但平板、折叠屏展开、横屏、微信分屏这些「宽 > 高」或「宽高比偏大」
+ * 的形态下会彻底失控：1024×768 的框高是 750px，几乎等于整屏；
+ * 844×390 的框上沿直接跑到 -153px，用户连框都看不见。
+ * 更要命的是 judgeAlign 用「脸高 / 框高 × 0.82」判距离，
+ * 框一大，比值永远 < 0.78，页面一直喊「靠近一点」，
+ * 永远进不了 locked —— 自动匹配在这类设备上**一次都不会触发**。
+ *
+ * 0.46 略高于常见竖屏手机的 0.41，所以对手机是零改动；
+ * 只在宽高比超过 0.628 的形态下生效，把框按屏高收回来。
+ */
+const GUIDE_H_MAX_RATIO = 0.46
 
 /** 框内理想脸宽 = 框宽 × 这个比例（脸略小于框，视觉上才有「套住」的感觉） */
 const GUIDE_FACE_FILL = 0.82
@@ -205,8 +220,15 @@ function createYawEstimator() {
 }
 
 function guideFrame(cw, ch) {
-  if (!cw || !ch) return null
-  const rx = cw * GUIDE_RX_RATIO
+  // 逐个验数字：负数会画出负宽高、字符串会混进 wxml 的 inline style、
+  // Infinity / NaN 会让整块定位声明失效。这些值不该产生几何。
+  if (typeof cw !== 'number' || typeof ch !== 'number' ||
+      !isFinite(cw) || !isFinite(ch) || cw <= 0 || ch <= 0) return null
+  // 两条上界取更小的那个：竖屏由屏宽定，宽屏由屏高定。
+  const rx = Math.min(
+    cw * GUIDE_RX_RATIO,
+    (ch * GUIDE_H_MAX_RATIO) / (2 * GUIDE_ASPECT)
+  )
   const ry = rx * GUIDE_ASPECT
   return {
     cx: cw / 2,
@@ -310,9 +332,11 @@ function judgeAlign(face, viewport, angle, yaw) {
  * @returns {{x:number,y:number,w:number,h:number}|null}
  */
 function faceAnchorToBox(anchor, frame, viewport, opt) {
-  const cw = viewport.w
-  const ch = viewport.h
-  if (!cw || !ch || !frame || !frame.w || !frame.h) return null
+  const cw = viewport && viewport.w
+  const ch = viewport && viewport.h
+  if (!(cw > 0) || !(ch > 0) || !isFinite(cw) || !isFinite(ch)) return null
+  if (!frame || !(frame.w > 0) || !(frame.h > 0) ||
+      !isFinite(frame.w) || !isFinite(frame.h)) return null
 
   const o = anchor && anchor.origin
   const s = anchor && anchor.size
@@ -366,8 +390,13 @@ function faceAnchorToBox(anchor, frame, viewport, opt) {
   // 夹完要同步修正 cx/cy 吗？不用：cx 是脸心，脸心本身没有溢出问题，
   // 变的是脸有多大。脸心贴着屏幕边缘时发型会有一部分出画，这是对的 ——
   // 用户的脸本来就出画了。
-  const wMin = cw * FACE_W_MIN_RATIO
-  const wMax = cw * FACE_W_MAX_RATIO
+  // 夹取区间必须跟着取景框走，不能写死屏宽。
+  // 竖屏时框宽 = 0.60 屏宽，这两个式子与原值完全一致；
+  // 宽屏时框被屏高收小了，若仍按屏宽夹，发型框会比取景框大三倍，
+  // 用户看到的是「框里一小张脸、头上顶着一顶巨帽」。
+  const g = guideFrame(cw, ch)
+  const wMin = g ? g.w * (FACE_W_MIN_RATIO / (2 * GUIDE_RX_RATIO)) : cw * FACE_W_MIN_RATIO
+  const wMax = g ? g.w * (FACE_W_MAX_RATIO / (2 * GUIDE_RX_RATIO)) : cw * FACE_W_MAX_RATIO
   if (faceW < wMin) faceW = wMin
   else if (faceW > wMax) faceW = wMax
 
@@ -403,6 +432,7 @@ module.exports = {
   GUIDE_RX_RATIO: GUIDE_RX_RATIO,
   GUIDE_CY_RATIO: GUIDE_CY_RATIO,
   GUIDE_ASPECT: GUIDE_ASPECT,
+  GUIDE_H_MAX_RATIO: GUIDE_H_MAX_RATIO,
   GUIDE_FACE_FILL: GUIDE_FACE_FILL,
   ALIGN_TOL: ALIGN_TOL,
   ALIGN_SCALE_MIN: ALIGN_SCALE_MIN,

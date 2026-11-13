@@ -101,10 +101,11 @@ ar-hairstyle/
 不依赖微信开发者工具，Node 直接跑。
 
 ```bash
-# 全量：53 套
+# 全量：54 套
 node tests/all.js
 
 # 单套
+node tests/audit-50.js          # 第 9 轮：50 轮用户视角自查（屏幕形态 / 生命周期 / 流程边界）
 node tests/face-match.js        # 自动匹配
 node tests/guide-frame.js       # 取景框与对齐
 node tests/render-check.js      # 10 款发型几何 / 覆盖率
@@ -121,6 +122,7 @@ node tests/canvas-shot.js 900 black bob
 - 布局用无头 Chrome 截图 + `--dump-dom` 量高度，不靠「看着差不多」。
 
 审计记录在 `tests/user-audit-*.md`，按轮次记录每一轮发现了什么、改了什么、为什么这么改。
+第 9 轮的 50 轮自查见 `tests/user-audit-50.md`，它单独覆盖屏幕形态、尺寸变化、失脸边界、肤色空间一致性等前几轮没碰过的维度。
 
 ---
 
@@ -131,6 +133,8 @@ node tests/canvas-shot.js 900 black bob
 - **肤色只判深浅、不判冷暖**：两路测量打架时只展示建议，不自动替换。
 - **脸型阈值（0.84 / 0.70）需要真机回归校准**：目前是几何推算值，建议用 20 张真实人脸验证后再定稿。
 - **多张脸入镜未处理**：取第一个 anchor。
+- **屏幕宽高比自适应只做过几何验证**：取景框现在同时受屏宽和屏高约束（框高不超过屏高 46%），折叠屏展开 / 平板 / 分屏时会触发 `onResize` 重算画布与框；但真机上的相机预览是否同样按 cover 铺满、前置画面在横屏下是否需要额外旋转，仍需实机确认。
+- **`faceAnchorToBox` 的归一化坐标分支**：不同基础库给的 anchor 坐标体系不一致，代码按「x/y/w 都 ≤1.5」判定归一化，这条规则尚未用真机 anchor 日志核对。
 
 ---
 
