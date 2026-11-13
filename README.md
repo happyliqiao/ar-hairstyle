@@ -101,11 +101,12 @@ ar-hairstyle/
 不依赖微信开发者工具，Node 直接跑。
 
 ```bash
-# 全量：54 套
+# 全量：55 套
 node tests/all.js
 
 # 单套
 node tests/audit-50.js          # 第 9 轮：50 轮用户视角自查（屏幕形态 / 生命周期 / 流程边界）
+node tests/audit-50b.js         # 第 10 轮：50 轮用户视角自查（拍摄并发 / 数据一致性 / 异常恢复）
 node tests/face-match.js        # 自动匹配
 node tests/guide-frame.js       # 取景框与对齐
 node tests/render-check.js      # 10 款发型几何 / 覆盖率
@@ -123,6 +124,7 @@ node tests/canvas-shot.js 900 black bob
 
 审计记录在 `tests/user-audit-*.md`，按轮次记录每一轮发现了什么、改了什么、为什么这么改。
 第 9 轮的 50 轮自查见 `tests/user-audit-50.md`，它单独覆盖屏幕形态、尺寸变化、失脸边界、肤色空间一致性等前几轮没碰过的维度。
+第 10 轮的 50 轮自查见 `tests/user-audit-50b.md`，聚焦「按下快门之后那 1~3 秒」：拍摄期间换款/换色/进微调/返回、定时器竞态、预览与照片一致性、导出与落盘失败路径。
 
 ---
 

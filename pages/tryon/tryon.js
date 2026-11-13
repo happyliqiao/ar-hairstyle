@@ -1384,7 +1384,14 @@ Page({
     // 那会让开发者和体验者把「假人头上的示意」当成产品能力，
     // 甚至以为可以在这里出图。模拟器只做真机引导，不出任何虚拟效果。
     if (this.data.isDevtools) return
-    hairstyles.drawHair(ctx, box, this.data.currentStyle, this.data.currentColor, 1)
+    // 冻结期间必须用快门时的那套造型。
+    // 用户在「正在生成」里换了款/色，data 已经变了，但照片用的是 _captureLook；
+    // 预览若继续读 data，拍完 unfreeze 的一瞬间画面会从「新款」跳回「照片里的旧款」，
+    // 用户会以为照片拍错了。两边读同一份，预览就是照片。
+    const look = this.boxFrozen && this._captureLook ? this._captureLook : null
+    const styleId = look ? look.style : this.data.currentStyle
+    const colorId = look ? look.color : this.data.currentColor
+    hairstyles.drawHair(ctx, box, styleId, colorId, 1)
   },
 
   /* ==================== 拖动 ==================== */
@@ -1399,6 +1406,7 @@ Page({
   },
 
   onTouchStart(e) {
+    if (this.busyShoot()) return
     const p = this.touchPoint(e)
     if (!p) return
     // 手指一落到画面上，推荐卡片就先让开 —— 他要看的是自己的脸，
@@ -1431,6 +1439,9 @@ Page({
 
   onTouchMove(e) {
     if (!this.touchOrigin) return
+    // 拍摄期间拖动只改 dragDX、不改画面（render 用 frozenBox），
+    // 拍完 unfreeze 会突然跳一下；静默忽略，不刷 toast
+    if (this.data.shooting) return
     const p = this.touchPoint(e)
     if (!p) return
     // 一旦有明显位移就取消双击判定，否则拖动也会触发复位
@@ -1469,6 +1480,8 @@ Page({
 
   /** 复位微调参数到识脸默认值 */
   resetAdjust() {
+    // 冻结期间复位不会生效（render 用 frozenBox），只会把内存值改乱
+    if (this.busyShoot()) return
     this.dragDX = 0
     this.dragDY = 0
     this.sizeVal = 100
@@ -1677,6 +1690,10 @@ Page({
    * 否则「用户刚进页面时在转头」会变成「这个功能今天不会再出现了」。
    */
   scheduleRecRetry() {
+    // 已有排队中的重试就不要再挂一个。正常路径（定时器触发后 _recTimer
+    // 已清空）不受影响；这行挡住的是「maybeRecommend 每帧调用 + 异常路径
+    // 重复进入」时叠加多个 700ms 定时器。
+    if (this._recTimer) return
     if (this._recTries >= REC_MAX_RETRY) return
     this._recTries++
     const self = this
@@ -1759,6 +1776,7 @@ Page({
    * 用户不接受就只剩「自己乱划」这一条路，AI 匹配等于只值一次点击。
    */
   nextRecStyle() {
+    if (this.busyShoot()) return
     const alts = this.data.rec.alt || []
     if (alts.length < 2) return
     this._recAltIdx = ((this._recAltIdx || 0) + 1) % alts.length
@@ -1843,6 +1861,7 @@ Page({
 
   /** 用户点「换成这款」：把推荐款应用上去，并记为主动选择 */
   useRecStyle() {
+    if (this.busyShoot()) return
     const id = this.data.rec.styleId
     if (!hairstyles.hasStyle(id)) return
     this._userPickedStyle = true
@@ -1853,6 +1872,8 @@ Page({
 
   /** 用户说「判得不准」，自己指定脸型：重新排一遍，并强制应用 */
   pickShape(e) {
+    // 指定脸型会触发换款，拍摄期间同样要挡
+    if (this.busyShoot()) return
     const id = e.currentTarget.dataset.shape
     if (!match.SHAPE_LABEL[id]) return
     if (id === this.data.rec.shape) return
@@ -2067,6 +2088,8 @@ Page({
   /* ==================== 选款 / 选色 ==================== */
 
   pickStyle(e) {
+    // 正在生成照片：造型已冻结，换款只会让预览和照片分叉
+    if (this.busyShoot()) return
     // 横滑误触保护：这次 tap 之前手指移动过，当作滚动而不是选择
     if (swipe.consume(this._stripSwipe)) return
     const id = e.currentTarget.dataset.id
@@ -2155,6 +2178,8 @@ Page({
   },
 
   pickColor(e) {
+    // 同 pickStyle：拍摄期间换色不会进照片，只会让预览跳
+    if (this.busyShoot()) return
     // 与 pickStyle 同一套横滑误触保护
     if (swipe.consume(this._colorSwipe)) return
     const id = e.currentTarget.dataset.id
@@ -2207,6 +2232,8 @@ Page({
   },
 
   toggleFavorite() {
+    // 拍摄期间收藏的是「此刻的款」，照片里却是冻结的旧款，会记错
+    if (this.busyShoot()) return
     const on = store.toggleFavorite(this.data.currentStyle)
     this.setData({ isFav: on })
     this.showToast(on ? '已加入收藏' : '已取消收藏')
@@ -2215,6 +2242,8 @@ Page({
   /* ==================== 微调 ==================== */
 
   toggleAdjust() {
+    // 拍摄期间画面是冻结的，滑块拖了也不会动，等于给用户一个坏掉的控件
+    if (this.busyShoot()) return
     // 进微调前先收起推荐卡片：卡片展开时占着面板，
     // 两个都摊开会把画面挤掉一半。
     this.collapseRec()
@@ -2240,6 +2269,7 @@ Page({
    * 拖动中真正需要的只有「画面跟着变」，数值显示可以等松手再更新。
    */
   onSizeChanging(e) {
+    if (this.data.shooting) return
     this.sizeVal = e.detail.value
     // 拉滑块和拖画面是同一件事：都在手动摆位置。
     // 不置 manualOn 的话，识脸不可用时滑块拖到底画布也不动一下，
@@ -2249,12 +2279,14 @@ Page({
   },
 
   onYChanging(e) {
+    if (this.data.shooting) return
     this.yVal = e.detail.value
     this.enterManual()
     this.render(true)
   },
 
   onRotChanging(e) {
+    if (this.data.shooting) return
     this.rotVal = e.detail.value
     this.enterManual()
     this.render(true)
@@ -2262,6 +2294,7 @@ Page({
 
   /* 松手：把值同步回 data，让 wxml 的 value 与真实值一致 */
   onSizeChange(e) {
+    if (this.data.shooting) return
     this.sizeVal = e.detail.value
     this.enterManual()
     this.render(true)
@@ -2269,6 +2302,7 @@ Page({
   },
 
   onYChange(e) {
+    if (this.data.shooting) return
     this.yVal = e.detail.value
     this.enterManual()
     this.render(true)
@@ -2276,6 +2310,7 @@ Page({
   },
 
   onRotChange(e) {
+    if (this.data.shooting) return
     this.rotVal = e.detail.value
     this.enterManual()
     this.render(true)
@@ -2357,6 +2392,23 @@ Page({
 
   /* ==================== 拍照 ==================== */
 
+  /**
+   * 「正在生成照片」的统一守卫。
+   *
+   * 按下快门到 afterCompose 之间通常有 1~3 秒（合成 + saveFile + 写相册）。
+   * 这段时间预览用的是冻结框、照片用的是冻结造型，但页面上的按钮还都能点：
+   *   - 换款 / 换色：data 变了，冻结框不变，拍完 unfreeze 的一瞬间画面跳一下
+   *   - 进微调 / 拖滑块：滑块动了，画面因为冻结完全不动，用户以为卡死
+   *   - 返回 / 去记录页：页面一销毁，compose 的 _alive 检查直接 return，
+   *     照片永远不写记录 —— 用户以为拍好了，回去找不到
+   * 所以造型类、几何类、导航类操作在拍摄期间统一挡住，并说明原因。
+   */
+  busyShoot() {
+    if (!this.data.shooting) return false
+    this.showToast('正在生成照片，完成后再操作')
+    return true
+  },
+
   capture() {
     if (this.data.shooting) return
     if (this.data.isDevtools) {
@@ -2410,6 +2462,10 @@ Page({
       color: this.data.currentColor,
       mirror: !!this.data.mirrorX
     }
+    // 视口也要冻结。拍照期间折叠屏展开 / 分屏 / 横竖屏切换会触发 onResize，
+    // cw/ch 一变，compose 的 cover 映射就会拿新视口去套旧的 frozenBox，
+    // 照片里的发型整体偏移。用快门那一刻的视口换算，才和预览一致。
+    this._captureViewport = { cw: this.cw, ch: this.ch }
     // 快门看门狗。takePhoto 的回调在真机上不是「一定会来」的：
     // 相机被别的 App 抢占、来电、或者用户拍到一半切走，
     // 都可能让 success/fail 一个都不触发。此时 shooting 停在 true，
@@ -2550,11 +2606,15 @@ Page({
             self.showToast('没有定位到发型位置，请重拍')
             return
           }
-          if (self.cw && self.ch) {
+          // 用快门那一刻冻结的视口换算，而不是此刻的 cw/ch。
+          // 拍照期间 onResize 可能已经改过画布尺寸，拿新视口套旧 frozenBox
+          // 会让照片里的发型整体偏出去。
+          const vp = self._captureViewport || { cw: self.cw, ch: self.ch }
+          if (vp.cw && vp.ch) {
             // 屏幕坐标 -> 照片坐标（cover 映射）
-            const k = Math.max(pw / self.cw, ph / self.ch)
-            const offX = (pw - self.cw * k) / 2
-            const offY = (ph - self.ch * k) / 2
+            const k = Math.max(pw / vp.cw, ph / vp.ch)
+            const offX = (pw - vp.cw * k) / 2
+            const offY = (ph - vp.ch * k) / 2
             const mapped = {
               x: box.x * k + offX,
               y: box.y * k + offY,
@@ -2806,12 +2866,16 @@ Page({
   noop() {},
 
   goBack() {
+    // 拍摄期间退出：compose 的 _alive 检查会让照片静默丢失
+    if (this.busyShoot()) return
     // 从分享卡片直接进本页时，栈里只有这一层，navigateBack 会失败。
     // nav.back 的兜底就是退回首页 tab。
     nav.back('/pages/index/index')
   },
 
   goHistory() {
+    // 同上：拍摄期间跳页等于丢掉这张照片
+    if (this.busyShoot()) return
     nav.tab('/pages/history/history')
   },
 
